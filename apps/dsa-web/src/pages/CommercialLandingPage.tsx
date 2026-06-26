@@ -416,7 +416,7 @@ const CommercialLandingPage: React.FC = () => {
           <header className="gyai-nav">
             <div className="gyai-brand">
               <span className="gyai-brand-name">每日股研AI</span>
-              <span className="gyai-brand-subtitle">每日新数据 · 实时评估A/H股</span>
+              <span className="gyai-brand-subtitle">每日AI新数据 · 实时评估A/H股</span>
             </div>
 
             <nav className="gyai-nav-right" aria-label="每日股研AI导航">

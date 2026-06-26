@@ -129,6 +129,18 @@ class CommercialNewsItem(BaseModel):
     data_status: Optional[str] = Field(None, description="latest/pending")
 
 
+class CommercialNewsSummary(BaseModel):
+    """News-pool coverage summary shown above selected news items."""
+
+    pool_count: int = Field(0, description="本次资讯池聚合条数")
+    display_count: int = Field(0, description="页面当前展示条数")
+    positive_count: int = Field(0, description="利好资讯条数")
+    risk_count: int = Field(0, description="利空资讯条数")
+    neutral_count: int = Field(0, description="中性资讯条数")
+    latest_date: str = Field("待读取", description="资讯池最新日期")
+    description: str = Field("待读取", description="资讯池说明")
+
+
 class CommercialDataQuality(BaseModel):
     """Data freshness and decision-engine status."""
 
@@ -191,6 +203,7 @@ class CommercialAnalysisResponse(BaseModel):
     sniper_points: List[CommercialSniperPoint]
     industry_trend: CommercialIndustryTrend
     related_sectors: List[CommercialRelatedSector]
+    news_summary: CommercialNewsSummary
     news: List[CommercialNewsItem]
     data_quality: CommercialDataQuality
     data_audit: List[CommercialDataAuditItem]

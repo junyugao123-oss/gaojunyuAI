@@ -33,6 +33,7 @@ from api.v1.schemas.commercial_analysis import (
     CommercialIndustryTrendItem,
     CommercialInvestmentHypothesis,
     CommercialNewsItem,
+    CommercialNewsSummary,
     CommercialQuantMetric,
     CommercialRelatedSector,
     CommercialScore,
@@ -60,7 +61,9 @@ _QUOTE_CACHE: Dict[str, tuple[float, Optional[Dict[str, Any]]]] = {}
 _QUOTE_CACHE_SECONDS = 45
 _NEWS_CACHE: Dict[str, tuple[float, List[Dict[str, str]]]] = {}
 _NEWS_CACHE_SECONDS = 300
-_NEWS_RESULT_LIMIT = 10
+_NEWS_DISPLAY_LIMIT = 10
+_NEWS_POOL_LIMIT = 24
+_NEWS_RESULT_LIMIT = _NEWS_DISPLAY_LIMIT
 _SECTOR_CACHE: Dict[str, tuple[float, List[Dict[str, str]]]] = {}
 _SECTOR_CACHE_SECONDS = 120
 _FINANCIAL_CACHE: Dict[str, tuple[float, Optional[Dict[str, Any]]]] = {}
@@ -198,6 +201,56 @@ def _mean(values: List[float]) -> Optional[float]:
     if not cleaned:
         return None
     return sum(cleaned) / len(cleaned)
+
+
+def _quantile(values: List[float], q: float) -> Optional[float]:
+    cleaned = sorted(float(item) for item in values if isinstance(item, (int, float)) and item > 0)
+    if not cleaned:
+        return None
+    q = _clamp(q, 0.0, 1.0)
+    if len(cleaned) == 1:
+        return cleaned[0]
+    position = (len(cleaned) - 1) * q
+    lower = math.floor(position)
+    upper = math.ceil(position)
+    if lower == upper:
+        return cleaned[int(position)]
+    weight = position - lower
+    return cleaned[lower] * (1.0 - weight) + cleaned[upper] * weight
+
+
+def _weighted_average(items: List[tuple[Optional[float], float]]) -> Optional[float]:
+    weighted_sum = 0.0
+    total_weight = 0.0
+    for value, weight in items:
+        if isinstance(value, (int, float)) and value > 0 and weight > 0:
+            weighted_sum += float(value) * weight
+            total_weight += weight
+    if total_weight <= 0:
+        return None
+    return weighted_sum / total_weight
+
+
+def _stable_price_anchor(current_price: float, closes: List[float]) -> float:
+    """Blend realtime price with multi-period averages to reduce one-day noise."""
+
+    ma5 = _mean(closes[-5:])
+    ma20 = _mean(closes[-20:])
+    ma60 = _mean(closes[-60:])
+    return _weighted_average(
+        [
+            (current_price, 0.42),
+            (ma5, 0.14),
+            (ma20, 0.28),
+            (ma60, 0.16),
+        ]
+    ) or current_price
+
+
+def _bounded_signal(value: Optional[float], scale: float, limit: float) -> float:
+    if value is None or scale <= 0:
+        return 0.0
+    return math.tanh(float(value) / scale) * limit
 
 
 def _format_signed_percent(value: Optional[float]) -> str:
@@ -1462,28 +1515,39 @@ def _derive_dynamic_valuation(current_price: float, history: List[Dict[str, Any]
     closes = _history_values(history, "close")
     lows = _history_values(history, "low")
     highs = _history_values(history, "high")
-    recent_lows = lows[-120:] or lows
-    recent_highs = highs[-120:] or highs
+    recent_lows = lows[-160:] or lows
+    recent_highs = highs[-160:] or highs
     ma20 = _mean(closes[-20:])
     ma60 = _mean(closes[-60:])
     volatility = _annualized_volatility(closes)
+    stable_anchor = _stable_price_anchor(current_price, closes)
 
     if recent_lows and recent_highs:
-        range_low = min(recent_lows)
-        range_high = max(recent_highs)
-        anchors = [item for item in (current_price, ma20, ma60) if isinstance(item, (int, float)) and item > 0]
-        anchor = _mean([float(item) for item in anchors]) or current_price
-        low_buffer = 0.82 if volatility and volatility >= 80 else 0.88 if volatility and volatility >= 45 else 0.92
-        high_buffer = 1.42 if volatility and volatility >= 80 else 1.30 if volatility and volatility >= 45 else 1.20
-        low = max(min(range_low, current_price * 0.98), anchor * low_buffer)
-        high = min(max(range_high, current_price * 1.08), anchor * high_buffer)
+        support = _quantile(recent_lows, 0.18) or min(recent_lows)
+        resistance = _quantile(recent_highs, 0.82) or max(recent_highs)
+        trend_anchor = _weighted_average(
+            [
+                (stable_anchor, 0.54),
+                (ma20, 0.28),
+                (ma60, 0.18),
+            ]
+        ) or stable_anchor
+        vol_factor = _clamp(((volatility or 45.0) - 35.0) / 120.0, 0.0, 0.55)
+        low_buffer = 0.88 - vol_factor * 0.08
+        high_buffer = 1.22 + vol_factor * 0.20
+        low = max(support * 0.98, trend_anchor * low_buffer)
+        high = min(resistance * 1.02, trend_anchor * high_buffer)
+        if high <= low * 1.12:
+            width = trend_anchor * (0.12 + vol_factor * 0.10)
+            low = trend_anchor - width
+            high = trend_anchor + width * 1.18
     else:
-        low = current_price * 0.9
-        high = current_price * 1.18
+        low = stable_anchor * 0.9
+        high = stable_anchor * 1.18
 
     if high <= low:
-        low = current_price * 0.9
-        high = current_price * 1.18
+        low = stable_anchor * 0.9
+        high = stable_anchor * 1.18
     if high <= low * 1.08:
         high = low * 1.12
 
@@ -1495,8 +1559,8 @@ def _derive_dynamic_valuation(current_price: float, history: List[Dict[str, Any]
         "current_price": _market_price_round(current_price),
         "price_position": _price_position(current_price, low, high),
         "source": "computed",
-        "status": "computed_from_quote_history",
-        "inputs": ["current_price", "historical_low_high", "ma20", "ma60", "volatility"],
+        "status": "computed_from_robust_quote_history",
+        "inputs": ["current_price", "stable_price_anchor", "quantile_support_resistance", "ma20", "ma60", "volatility"],
     }
 
 
@@ -1506,6 +1570,44 @@ def _news_signal_counts(news: List[Dict[str, str]]) -> Dict[str, int]:
         tone = str(item.get("tone") or "neutral")
         counts[tone if tone in counts else "neutral"] += 1
     return counts
+
+
+def _build_news_summary(
+    news_pool: List[Dict[str, str]],
+    display_news: List[Dict[str, str]],
+) -> Dict[str, Any]:
+    if not news_pool or _has_pending_items(news_pool):
+        return {
+            "pool_count": 0,
+            "display_count": 0,
+            "positive_count": 0,
+            "risk_count": 0,
+            "neutral_count": 0,
+            "latest_date": "待读取",
+            "description": "资讯池待读取。",
+        }
+
+    counts = _news_signal_counts(news_pool)
+    display_count = len([
+        item for item in display_news
+        if item.get("title") and item.get("title") != "待读取"
+    ])
+    pool_count = len(news_pool)
+    latest_date = _first_valid_news_date(news_pool)
+    description = (
+        f"本次资讯池聚合{pool_count}条，精选展示最新{display_count}条；"
+        f"利好{counts['positive']}条、利空{counts['risk']}条、中性{counts['neutral']}条，"
+        "其余资讯进入情绪与结论计算。"
+    )
+    return {
+        "pool_count": pool_count,
+        "display_count": display_count,
+        "positive_count": counts["positive"],
+        "risk_count": counts["risk"],
+        "neutral_count": counts["neutral"],
+        "latest_date": latest_date,
+        "description": description,
+    }
 
 
 def _sector_average_change(sectors: List[Dict[str, str]]) -> Optional[float]:
@@ -1561,13 +1663,21 @@ def _build_dynamic_scores(
     momentum_60_value = momentum_60 if momentum_60 is not None else 0.0
     volume_bonus = _clamp(((volume_ratio or 1.0) - 1.0) * 1.8, -0.8, 1.0)
     volatility_penalty = _clamp((volatility or 45.0) / 55.0, 0.4, 2.4)
+    news_balance = positive_news - risk_news
     shareholder_hits = 0
     for item in news:
         compact_title = _compact_query(item.get("title", ""))
         if any(keyword in compact_title for keyword in ("分红", "派息", "回购", "回購", "增持")):
             shareholder_hits += 1
 
-    growth_score = 5.2 + momentum_60_value / 18.0 + momentum_20_value / 24.0 + positive_news * 0.35 - risk_news * 0.45 + sector_bonus
+    growth_score = (
+        5.4
+        + _bounded_signal(momentum_60_value, 65.0, 1.9)
+        + _bounded_signal(momentum_20_value, 35.0, 1.1)
+        + _bounded_signal(news_balance, 8.0, 0.85)
+        + sector_bonus * 0.55
+        - _clamp((volatility or 45.0) / 180.0, 0.0, 0.55)
+    )
     profitability_score = 4.6 + positive_news * 0.25 - risk_news * 0.4 + volume_bonus + (0.5 if ma20 and ma60 and ma20 >= ma60 else -0.2)
     finance_score = 5.4 + (0.4 if current_price >= (ma60 or current_price) else -0.3) + volume_bonus - volatility_penalty * 0.65 - risk_news * 0.25
     dividend_score = 0.8 + shareholder_hits * 2.0 + (0.4 if shareholder_hits and positive_news >= risk_news else 0.0)
@@ -1764,6 +1874,7 @@ def _build_data_audit(pack: Dict[str, Any], recommendation: CommercialAiRecommen
     news_status = str(pack.get("_news_status") or "pending")
     sector_source = str(pack.get("_sector_source") or "待读取")
     news_source = str(pack.get("_news_source") or "待读取")
+    news_summary = pack.get("_news_summary") or {}
     history_count = len(pack.get("_history") or [])
     financials = pack.get("_financials")
 
@@ -1779,7 +1890,7 @@ def _build_data_audit(pack: Dict[str, Any], recommendation: CommercialAiRecommen
             "section": "估值区间",
             "classification": "computed",
             "status": "ok" if valuation.get("status") else "partial",
-            "evidence": f"由当前价、近{history_count}条日线、MA20/MA60和波动率计算。",
+            "evidence": f"由当前价、近{history_count}条日线、稳定价格锚、分位数支撑阻力、MA20/MA60和波动率计算。",
             "action": "这是算法估值区间，不等同于券商目标价。",
         },
         {
@@ -1807,8 +1918,11 @@ def _build_data_audit(pack: Dict[str, Any], recommendation: CommercialAiRecommen
             "section": "最新相关资讯",
             "classification": "realtime" if news_status == "latest_public_source" else "pending",
             "status": "ok" if news_status == "latest_public_source" else "pending",
-            "evidence": f"{news_source} · 最新日期 {_first_valid_news_date(pack.get('news') or [])}",
-            "action": "资讯按时间倒序展示，并标记利好、利空或中性。",
+            "evidence": (
+                f"{news_source} · 资讯池{news_summary.get('pool_count', 0)}条 · "
+                f"最新日期 {news_summary.get('latest_date') or _first_valid_news_date(pack.get('news') or [])}"
+            ),
+            "action": f"页面精选展示最新{news_summary.get('display_count', len(pack.get('news') or []))}条，并标记利好、利空或中性。",
         },
         {
             "section": "AI结论",
@@ -1843,7 +1957,7 @@ def _build_investment_hypotheses(pack: Dict[str, Any]) -> List[Dict[str, str]]:
     quant_metrics = pack.get("quant_metrics") or []
     sniper_points = pack.get("sniper_points") or []
     sectors = pack.get("related_sectors") or []
-    news = pack.get("news") or []
+    news = pack.get("_news_pool") or pack.get("news") or []
     unit = str(valuation.get("currency_label") or "元/股").split("/")[0]
     price_position = str(valuation.get("price_position") or "待读取")
     current_price = _safe_float(valuation.get("current_price"))
@@ -1936,11 +2050,12 @@ def _refresh_dynamic_sections(pack: Dict[str, Any]) -> None:
     valuation = pack["valuation"]
     current_price = float(valuation["current_price"])
     history = pack.get("_history") or []
+    decision_news = pack.get("_news_pool") or pack.get("news") or []
     pack["scores"] = _build_dynamic_scores(
         current_price,
         history,
         valuation,
-        pack.get("news") or [],
+        decision_news,
         pack.get("related_sectors") or [],
         pack.get("_financials"),
     )
@@ -1949,7 +2064,7 @@ def _refresh_dynamic_sections(pack: Dict[str, Any]) -> None:
         valuation,
         pack.get("quant_metrics") or [],
         pack.get("related_sectors") or [],
-        pack.get("news") or [],
+        decision_news,
     )
 
 
@@ -2061,23 +2176,26 @@ def _derive_sniper_points(current_price: float, history: List[Dict[str, Any]]) -
     lows = _history_values(history, "low")
     highs = _history_values(history, "high")
     closes = _history_values(history, "close")
-    recent_low = min(lows[-20:]) if lows else current_price * 0.88
-    recent_high = max(highs[-20:]) if highs else current_price * 1.12
-    swing_high = max(highs[-60:]) if highs else recent_high
+    stable_anchor = _stable_price_anchor(current_price, closes)
+    recent_low = (_quantile(lows[-30:], 0.18) if lows else None) or current_price * 0.88
+    recent_high = (_quantile(highs[-30:], 0.82) if highs else None) or current_price * 1.12
+    swing_high = (_quantile(highs[-90:], 0.86) if highs else None) or recent_high
     ma20 = _mean(closes[-20:])
+    ma60 = _mean(closes[-60:])
     volatility = _annualized_volatility(closes)
-    focus_buffer = 0.9 if volatility and volatility >= 80 else 0.94
+    focus_buffer = 0.88 if volatility and volatility >= 80 else 0.92 if volatility and volatility >= 45 else 0.95
 
-    focus_low = max(recent_low, current_price * focus_buffer)
-    focus_high = min(max(current_price * 1.03, focus_low), recent_high)
+    focus_low = max(recent_low, stable_anchor * focus_buffer)
+    focus_high = min(max(stable_anchor * 1.035, current_price * 1.015, focus_low), recent_high)
     if focus_high <= focus_low:
-        focus_high = max(focus_low, current_price * 1.02)
+        focus_high = max(focus_low, stable_anchor * 1.03)
     confirm = max(
-        current_price * 1.08,
+        stable_anchor * 1.08,
         ma20 * 1.01 if ma20 else 0,
-        min(swing_high, current_price * 1.25),
+        ma60 * 1.04 if ma60 else 0,
+        min(swing_high, stable_anchor * 1.22),
     )
-    invalid = min(current_price * 0.88, recent_low * 0.98)
+    invalid = min(stable_anchor * 0.88, recent_low * 0.97)
 
     return [
         {
@@ -2304,6 +2422,7 @@ def _build_deepseek_prompt(pack: Dict[str, Any]) -> str:
         "sniper_points": pack["sniper_points"],
         "industry_trend": pack.get("industry_trend"),
         "related_sectors": pack["related_sectors"],
+        "news_summary": pack.get("_news_summary") or {},
         "news": pack["news"],
         "investment_hypotheses": pack.get("investment_hypotheses") or [],
         "data_status": {
@@ -2314,7 +2433,8 @@ def _build_deepseek_prompt(pack: Dict[str, Any]) -> str:
         },
         "instruction": (
             "请基于以上数据，输出简短、专业、有推荐倾向但不过度承诺的股票分析结论。"
-            "news.tone 中 positive=利好，risk=利空，neutral=中性；必须把最新资讯纳入判断。"
+                "news_summary 是完整资讯池统计，news 是前端精选展示列表；必须把资讯池情绪分布纳入判断。"
+                "news.tone 中 positive=利好，risk=利空，neutral=中性；必须把最新资讯纳入判断。"
             "必须尊重 investment_hypotheses 和 data_status；待读取的数据不能当成事实。"
             "面向用户的措辞不要出现“待确认”“等待确认”，改用趋势验证、量价验证或观察验证。"
             "不要写聊天式回答，不要展开长篇解释。"
@@ -2396,7 +2516,7 @@ def _try_deepseek_industry_trend(pack: Dict[str, Any]) -> CommercialIndustryTren
     ).strip()
     payload = {
         "model": model,
-        "temperature": 0.2,
+        "temperature": 0.1,
         "max_tokens": 520,
         "response_format": {"type": "json_object"},
         "messages": [
@@ -2580,11 +2700,19 @@ def _build_response(stock_code: str) -> CommercialAnalysisResponse:
         ),
         2,
     )
-    latest_news = _fetch_latest_news(code, pack["stock"]["name"], pack["stock"]["market"])
+    latest_news = _fetch_latest_news(
+        code,
+        pack["stock"]["name"],
+        pack["stock"]["market"],
+        limit=_NEWS_POOL_LIMIT,
+    )
     if latest_news:
         for item in latest_news:
             item["data_status"] = "latest_public_source"
-        pack["news"] = latest_news
+        display_news = latest_news[:_NEWS_DISPLAY_LIMIT]
+        pack["_news_pool"] = latest_news
+        pack["news"] = display_news
+        pack["_news_summary"] = _build_news_summary(latest_news, display_news)
         pack["_news_status"] = "latest_public_source"
         pack["_news_source"] = "资讯情绪引擎"
     else:
@@ -2598,6 +2726,8 @@ def _build_response(stock_code: str) -> CommercialAnalysisResponse:
                 "data_status": "pending",
             }
         ]
+        pack["_news_pool"] = []
+        pack["_news_summary"] = _build_news_summary([], pack["news"])
         pack["_news_status"] = "pending"
         pack["_news_source"] = "待读取"
 
@@ -2652,6 +2782,7 @@ def _build_response(stock_code: str) -> CommercialAnalysisResponse:
         sniper_points=[CommercialSniperPoint(**item) for item in pack["sniper_points"]],
         industry_trend=industry_trend,
         related_sectors=[CommercialRelatedSector(**item) for item in pack["related_sectors"]],
+        news_summary=CommercialNewsSummary(**(pack.get("_news_summary") or _build_news_summary([], pack.get("news") or []))),
         news=[CommercialNewsItem(**item) for item in pack["news"]],
         data_quality=data_quality,
         data_audit=[CommercialDataAuditItem(**item) for item in data_audit],

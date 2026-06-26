@@ -97,6 +97,16 @@ export type CommercialNewsItem = {
   dataStatus?: string | null;
 };
 
+export type CommercialNewsSummary = {
+  poolCount: number;
+  displayCount: number;
+  positiveCount: number;
+  riskCount: number;
+  neutralCount: number;
+  latestDate: string;
+  description: string;
+};
+
 export type CommercialDataQuality = {
   updatedAt: string;
   quoteSource: string;
@@ -147,6 +157,7 @@ export type CommercialAnalysis = {
   sniperPoints: CommercialSniperPoint[];
   industryTrend: CommercialIndustryTrend;
   relatedSectors: CommercialRelatedSector[];
+  newsSummary: CommercialNewsSummary;
   news: CommercialNewsItem[];
   dataQuality: CommercialDataQuality;
   dataAudit: CommercialDataAuditItem[];

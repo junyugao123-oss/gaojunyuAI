@@ -194,6 +194,18 @@ const CommercialAnalysisPage: React.FC = () => {
   const actionPoints = [invalidPoint, confirmPoint].filter(
     (point): point is CommercialAnalysis['sniperPoints'][number] => Boolean(point),
   );
+  const newsSummary = analysis?.newsSummary ?? {
+    poolCount: analysis?.news.length ?? 0,
+    displayCount: analysis?.news.length ?? 0,
+    positiveCount: 0,
+    riskCount: 0,
+    neutralCount: 0,
+    latestDate: '待读取',
+    description: '资讯池待读取。',
+  };
+  const newsHeaderDescription = newsSummary.poolCount > 0
+    ? `已聚合${newsSummary.poolCount}条资讯，精选展示最新${newsSummary.displayCount}条重点`
+    : '资讯池多源聚合，页面精选展示最新重点';
   const industryTrend = analysis?.industryTrend ?? {
     theme: '待读取',
     source: 'pending',
@@ -217,7 +229,7 @@ const CommercialAnalysisPage: React.FC = () => {
         <header className="gyaia-nav">
           <Link to="/" className="gyaia-brand" aria-label="返回每日股研AI首页">
             <span className="gyaia-brand-name">每日股研AI</span>
-            <span className="gyaia-brand-subtitle">每日新数据 · 实时评估A/H股</span>
+            <span className="gyaia-brand-subtitle">每日AI新数据 · 实时评估A/H股</span>
           </Link>
           <nav className="gyaia-nav-right" aria-label="核心能力">
             <span><Database aria-hidden="true" />A/H股全域数据</span>
@@ -476,7 +488,29 @@ const CommercialAnalysisPage: React.FC = () => {
             </section>
 
             <section className="gyaia-module gyaia-news-panel" aria-label="最新相关资讯">
-              {moduleHeader('08', '最新相关资讯', '聚合股票新闻、公告与市场资讯，按时间倒序展示')}
+              {moduleHeader('08', '最新相关资讯', newsHeaderDescription)}
+              <div className="gyaia-news-summary" aria-label="资讯池概览">
+                <div>
+                  <strong>{newsSummary.poolCount}</strong>
+                  <span>资讯池聚合</span>
+                </div>
+                <div>
+                  <strong>{newsSummary.displayCount}</strong>
+                  <span>当前精选展示</span>
+                </div>
+                <div className="tone-positive">
+                  <strong>{newsSummary.positiveCount}</strong>
+                  <span>利好</span>
+                </div>
+                <div className="tone-risk">
+                  <strong>{newsSummary.riskCount}</strong>
+                  <span>利空</span>
+                </div>
+                <div className="tone-neutral">
+                  <strong>{newsSummary.neutralCount}</strong>
+                  <span>中性</span>
+                </div>
+              </div>
               <div className="gyaia-news-list">
                 {analysis.news.map((item) => {
                   const isPending = item.tone === 'pending' || item.title === '待读取' || item.url === '#';
