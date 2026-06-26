@@ -416,7 +416,7 @@ const CommercialLandingPage: React.FC = () => {
           <header className="gyai-nav">
             <div className="gyai-brand">
               <span className="gyai-brand-name">每日股研AI</span>
-              <span className="gyai-brand-subtitle">A/H股智能分析助手</span>
+              <span className="gyai-brand-subtitle">每日新数据 · 实时评估A/H股</span>
             </div>
 
             <nav className="gyai-nav-right" aria-label="每日股研AI导航">
@@ -429,7 +429,10 @@ const CommercialLandingPage: React.FC = () => {
           </header>
 
           <div className="gyai-hero-content">
-            <h1>输入一只股票名称或代码，每日给你最专业的分析</h1>
+            <h1>
+              <span>输入一只股票名称或代码，</span>
+              <span>每日给你最专业的分析</span>
+            </h1>
 
             <form
               className="gyai-search"

@@ -153,7 +153,7 @@ class CommercialInvestmentHypothesis(BaseModel):
     """Trackable investment thesis item generated from the decision pack."""
 
     title: str = Field(..., description="假设名称")
-    status: str = Field(..., description="成立/待确认/风险/待读取")
+    status: str = Field(..., description="成立/观察中/风险/待读取")
     evidence: str = Field(..., description="当前证据")
     check_next: str = Field(..., description="下一步要观察什么")
     invalidated_by: str = Field(..., description="什么情况会推翻该假设")

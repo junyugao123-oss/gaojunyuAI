@@ -573,7 +573,7 @@ def _try_tencent_market_data(code: str) -> Optional[Dict[str, Any]]:
         quote = _parse_tencent_quote(qt_fields, history)
         if quote.get("price"):
             result = {
-                "provider": "腾讯行情",
+                "provider": "实时行情",
                 "provider_symbol": symbol,
                 "quote": quote,
                 "history": history,
@@ -674,7 +674,7 @@ def _try_stock_api_market_data(code: str) -> Optional[Dict[str, Any]]:
         percent = _safe_float(stock.get("percent"))
         history = _parse_stock_api_rows(payload.get("klines"))
         result = {
-            "provider": f"stock-api:{payload.get('providerSource') or stock.get('source') or 'auto'}",
+            "provider": "实时行情",
             "provider_symbol": str(payload.get("providerCode") or symbol),
             "quote": {
                 "name": str(stock.get("name") or "").strip() or None,
@@ -795,7 +795,7 @@ def _is_broad_market_board(name: str) -> bool:
         "富时罗素",
         "msci",
         "百元股",
-        "东方财富热股",
+        "热股",
         "央视50",
         "hs300",
         "上证50",
@@ -893,7 +893,7 @@ def _fetch_eastmoney_related_sectors(code: str, limit: int = 6) -> List[Dict[str
                 "realtime_board": name,
                 "data_source": "实时所属板块",
                 "data_status": "latest_public_source",
-                "reason": f"东方财富实时所属板块，板块{heat}{leader_text}。",
+                "reason": f"实时板块联动显示，板块{heat}{leader_text}。",
             }
         )
         if len(sectors) >= limit:
@@ -1181,7 +1181,7 @@ def _fetch_aastocks_news(code: str, stock_name: str, limit: int = _NEWS_RESULT_L
         items.append(
             {
                 "title": title,
-                "source": _strip_html(source_match.group(1)) if source_match else "AASTOCKS新闻",
+                "source": "市场资讯",
                 "date": _normalize_news_date(date_match.group(1) if date_match else None),
                 "url": urljoin(_AASTOCKS_BASE, href),
                 "tone": _news_tone(title),
@@ -1240,7 +1240,7 @@ def _fetch_eastmoney_announcements(code: str, stock_name: str, limit: int = _NEW
         items.append(
             {
                 "title": title,
-                "source": f"东方财富公告 · {column_name}",
+                "source": f"公司公告 · {column_name}",
                 "date": _normalize_news_date(row.get("notice_date") or row.get("display_time")),
                 "url": href,
                 "tone": _news_tone(title),
@@ -1275,13 +1275,12 @@ def _fetch_akshare_a_stock_news(code: str, stock_name: str, limit: int = _NEWS_R
         display_title = title
         if stock_name and _compact_query(stock_name) not in _compact_query(title):
             display_title = f"{stock_name}相关：{title}"
-        source = _strip_html(str(row.get("文章来源") or "东方财富资讯"))
         date = _normalize_news_date(row.get("发布时间"))
         url = str(row.get("新闻链接") or "https://finance.eastmoney.com/").strip()
         items.append(
             {
                 "title": display_title,
-                "source": source,
+                "source": "市场资讯",
                 "date": date,
                 "url": url,
                 "tone": _news_tone(f"{title} {content}"),
@@ -1836,7 +1835,7 @@ def _hypothesis_status_from_value(
         return "成立"
     if text in risk_values:
         return "风险"
-    return "待确认"
+    return "观察中"
 
 
 def _build_investment_hypotheses(pack: Dict[str, Any]) -> List[Dict[str, str]]:
@@ -1860,7 +1859,7 @@ def _build_investment_hypotheses(pack: Dict[str, Any]) -> List[Dict[str, str]]:
     if current_price is None or low is None or high is None:
         valuation_status = "待读取"
     elif current_price <= high:
-        valuation_status = "成立" if current_price <= low or "下沿" in price_position else "待确认"
+        valuation_status = "成立" if current_price <= low or "下沿" in price_position else "观察中"
     else:
         valuation_status = "风险"
 
@@ -1870,7 +1869,7 @@ def _build_investment_hypotheses(pack: Dict[str, Any]) -> List[Dict[str, str]]:
         risk_values={"承压"},
     )
     if trend_status == "成立" and volume_state == "缩量":
-        trend_status = "待确认"
+        trend_status = "观察中"
 
     if news_counts["risk"] > news_counts["positive"] and news_counts["risk"] > 0:
         event_status = "风险"
@@ -1879,7 +1878,7 @@ def _build_investment_hypotheses(pack: Dict[str, Any]) -> List[Dict[str, str]]:
     elif _has_pending_items(news):
         event_status = "待读取"
     else:
-        event_status = "待确认"
+        event_status = "观察中"
 
     invalid_text = (
         f"{float(invalid_point['price']):.3f}{unit}"
@@ -1925,7 +1924,7 @@ def _build_investment_hypotheses(pack: Dict[str, Any]) -> List[Dict[str, str]]:
         },
         {
             "title": "风险纪律假设",
-            "status": "待确认" if invalid_text != "待读取" else "待读取",
+            "status": "观察中" if invalid_text != "待读取" else "待读取",
             "evidence": f"当前失效位设为{invalid_text}，用于控制短线承接失败风险。",
             "check_next": "优先观察失效位是否被有效跌破，再决定是否降级。",
             "invalidated_by": f"跌破{invalid_text}后无法快速收复，先降低关注优先级。" if invalid_text != "待读取" else "待读取",
@@ -2227,10 +2226,10 @@ def _fallback_recommendation(pack: Dict[str, Any]) -> CommercialAiRecommendation
     invalid = float(sniper_points[2]["price"]) if len(sniper_points) > 2 else current_price * 0.88
     if current_price < valuation_low:
         action = "逢低关注"
-        summary = "逢低关注：价格低于动态估值区间下沿，但需要承接确认。"
+        summary = "逢低关注：价格低于动态估值区间下沿，需要观察承接。"
     elif current_price <= valuation_high:
         action = "观察"
-        summary = "观察：价格位于动态估值区间内，等待量价确认。"
+        summary = "观察：价格位于动态估值区间内，关注量价验证。"
     else:
         action = "谨慎"
         summary = "谨慎：价格高于动态估值区间上沿，先控制追高风险。"
@@ -2252,12 +2251,45 @@ def _fallback_recommendation(pack: Dict[str, Any]) -> CommercialAiRecommendation
         status="fallback",
         action=action,
         summary=summary,
-        entry_plan=f"{focus} 若放量站稳{confirm:.3f}{unit}，趋势确认度提升。",
+        entry_plan=f"{focus} 若放量站稳{confirm:.3f}{unit}，趋势验证度提升。",
         risk_trigger=f"若跌破{invalid:.3f}{unit}，说明短线承接失败，应优先控制回撤。",
         evidence_summary=[
             f"当前价{current_price:.3f}{unit}，{valuation['price_position']}",
             "量化指标：" + ("；".join(quant_preview) if quant_preview else "待读取"),
             "关联板块：" + ("、".join(sector_names) if sector_names else "待读取"),
+        ],
+    )
+
+
+def _polish_recommendation_text(value: Any) -> str:
+    text = str(value or "")
+    replacements = [
+        ("需等待确认", "需观察验证"),
+        ("需要等待确认", "需要观察验证"),
+        ("等待趋势确认", "观察趋势验证"),
+        ("等待量价确认", "关注量价验证"),
+        ("等待确认", "等待验证"),
+        ("待确认", "观察验证"),
+        ("承接确认", "承接验证"),
+        ("趋势确认度", "趋势验证度"),
+    ]
+    for source, target in replacements:
+        text = text.replace(source, target)
+    return text
+
+
+def _polish_recommendation(recommendation: CommercialAiRecommendation) -> CommercialAiRecommendation:
+    return CommercialAiRecommendation(
+        source=recommendation.source,
+        model=recommendation.model,
+        status=recommendation.status,
+        action=_polish_recommendation_text(recommendation.action),
+        summary=_polish_recommendation_text(recommendation.summary),
+        entry_plan=_polish_recommendation_text(recommendation.entry_plan),
+        risk_trigger=_polish_recommendation_text(recommendation.risk_trigger),
+        evidence_summary=[
+            _polish_recommendation_text(item)
+            for item in recommendation.evidence_summary
         ],
     )
 
@@ -2284,6 +2316,7 @@ def _build_deepseek_prompt(pack: Dict[str, Any]) -> str:
             "请基于以上数据，输出简短、专业、有推荐倾向但不过度承诺的股票分析结论。"
             "news.tone 中 positive=利好，risk=利空，neutral=中性；必须把最新资讯纳入判断。"
             "必须尊重 investment_hypotheses 和 data_status；待读取的数据不能当成事实。"
+            "面向用户的措辞不要出现“待确认”“等待确认”，改用趋势验证、量价验证或观察验证。"
             "不要写聊天式回答，不要展开长篇解释。"
         ),
     }
@@ -2592,7 +2625,9 @@ def _build_response(stock_code: str) -> CommercialAnalysisResponse:
     industry_trend = _try_deepseek_industry_trend(pack)
     pack["industry_trend"] = industry_trend.model_dump()
     pack["investment_hypotheses"] = _build_investment_hypotheses(pack)
-    recommendation = _try_deepseek_recommendation(pack) or _fallback_recommendation(pack)
+    recommendation = _polish_recommendation(
+        _try_deepseek_recommendation(pack) or _fallback_recommendation(pack)
+    )
     data_audit = _build_data_audit(pack, recommendation)
     data_quality = CommercialDataQuality(
         updated_at=str(pack.get("_quote_updated_at") or _now_iso()),

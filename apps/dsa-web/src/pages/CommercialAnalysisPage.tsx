@@ -118,6 +118,11 @@ function hypothesisStatusClass(status: string): 'good' | 'watch' | 'risk' | 'pen
   return 'watch';
 }
 
+function hypothesisStatusLabel(status: string): string {
+  if (status === '待确认') return '观察中';
+  return status;
+}
+
 function moduleHeader(index: string, title: string, description: string) {
   return (
     <div className="gyaia-module-head">
@@ -212,7 +217,7 @@ const CommercialAnalysisPage: React.FC = () => {
         <header className="gyaia-nav">
           <Link to="/" className="gyaia-brand" aria-label="返回每日股研AI首页">
             <span className="gyaia-brand-name">每日股研AI</span>
-            <span className="gyaia-brand-subtitle">A/H股智能分析助手</span>
+            <span className="gyaia-brand-subtitle">每日新数据 · 实时评估A/H股</span>
           </Link>
           <nav className="gyaia-nav-right" aria-label="核心能力">
             <span><Database aria-hidden="true" />A/H股全域数据</span>
@@ -339,169 +344,173 @@ const CommercialAnalysisPage: React.FC = () => {
         </div>
 
         <div className="gyaia-content-grid">
-          <section className="gyaia-module gyaia-score-panel" aria-label="五维健康评分">
-            {moduleHeader('01', '五维健康评分', '价值、成长、盈利、财务、分红五项拆解')}
-            <div className="gyaia-score-grid">
-              {analysis.scores.map((score) => (
-                <div
-                  key={score.label}
-                  className={`gyaia-score depth-${scoreDepth(score.score)}`}
-                  title={score.description}
-                >
-                  <span className="gyaia-score-icon">{scoreIcon(score.label)}</span>
-                  <span>{score.label}</span>
-                  <strong style={{ '--score-angle': `${score.score * 36}deg` } as React.CSSProperties}>
-                    {score.score.toFixed(1)}
-                  </strong>
-                </div>
-              ))}
-            </div>
-          </section>
-
-          <section className="gyaia-module gyaia-sniper-panel" aria-label="狙击点位">
-            {moduleHeader('02', '狙击点位', '先看失效位，再等确认位，减少盲目追高')}
-            <div className="gyaia-sniper-list">
-              {analysis.sniperPoints.map((point) => (
-                <div key={point.label} className="gyaia-sniper-item">
-                  <span>{point.label}</span>
-                  <strong>{formatPrice(point.price)}</strong>
-                  <em>{point.description}</em>
-                </div>
-              ))}
-            </div>
-          </section>
-
-          <section className="gyaia-module gyaia-reason-panel" aria-label="结论依据">
-            {moduleHeader('03', '为什么是这个结论', '把估值、成长、量价和风险拆成可检查依据')}
-            <div className="gyaia-reason-list">
-              {analysis.decisionReasons.map((item) => (
-                <div key={item.title} className="gyaia-reason-item">
-                  <strong>{item.title}</strong>
-                  <span>{item.description}</span>
-                </div>
-              ))}
-            </div>
-          </section>
-
-          <section className="gyaia-module gyaia-quant-panel" aria-label="实时量化数据">
-            {moduleHeader('04', '实时量化数据', '用趋势、波动、量价位置判断当前交易质量')}
-            <div className="gyaia-quant-table" role="table" aria-label="实时量化数据">
-              {analysis.quantMetrics.map((metric) => (
-                <div key={`${metric.label}-${metric.value}`} className="gyaia-quant-row" role="row">
-                  <span role="cell">{metric.label}</span>
-                  <strong role="cell">{metric.value}</strong>
-                  <em role="cell">{metric.percentile}</em>
-                  <small role="cell">{metric.interpretation}</small>
-                </div>
-              ))}
-            </div>
-          </section>
-
-          <section className="gyaia-module gyaia-sector-panel" aria-label="关联板块">
-            {moduleHeader('05', '关联板块', '显示业务相关度，并同步实时板块涨跌')}
-            <div className="gyaia-sector-list">
-              {analysis.relatedSectors.map((sector) => (
-                <div key={sector.name} className="gyaia-sector-item">
-                  <strong>{sector.name}</strong>
-                  <div className="gyaia-sector-badges">
-                    <span className="gyaia-sector-badge relevance">
-                      相关度 {sector.relevance || sector.heat}
-                    </span>
-                    {sector.realtimeChange ? (
-                      <span className={`gyaia-sector-badge change-${sectorChangeTone(sector.realtimeChange)}`}>
-                        实时 {sector.realtimeBoard && sector.realtimeBoard !== sector.name ? `${sector.realtimeBoard} ` : ''}{sector.realtimeChange}
-                      </span>
-                    ) : null}
-                  </div>
-                  <em>{sector.reason}</em>
-                </div>
-              ))}
-            </div>
-          </section>
-
-          <section className="gyaia-module gyaia-trend-panel" aria-label="行业趋势">
-            {moduleHeader('06', '行业趋势', '用 -100% 到 +100% 表达行业方向的量化影响')}
-            <div className="gyaia-trend-head">
-              <span>{industryTrend.theme}</span>
-              <strong>{industryTrend.summary}</strong>
-            </div>
-            <div className="gyaia-trend-list">
-              {industryTrend.items.map((item) => {
-                const impactScore = trendImpactScore(item);
-                const impactClass = trendImpactClass(impactScore);
-
-                return (
+          <div className="gyaia-content-column gyaia-content-column-primary">
+            <section className="gyaia-module gyaia-score-panel" aria-label="五维健康评分">
+              {moduleHeader('01', '五维健康评分', '价值、成长、盈利、财务、分红五项拆解')}
+              <div className="gyaia-score-grid">
+                {analysis.scores.map((score) => (
                   <div
-                    key={`${item.tone}-${item.title}`}
-                    className={`gyaia-trend-item tone-${item.tone} impact-${impactClass}`}
-                    style={{ '--trend-impact-width': `${Math.abs(impactScore) / 2}%` } as React.CSSProperties}
+                    key={score.label}
+                    className={`gyaia-score depth-${scoreDepth(score.score)}`}
+                    title={score.description}
                   >
-                    <span>{trendToneLabel(item.tone)}</span>
-                    <strong>{item.title}</strong>
-                    <b aria-label={`行业趋势量化影响 ${trendImpactLabel(impactScore)} ${formatTrendImpact(impactScore)}`}>
-                      {formatTrendImpact(impactScore)}
-                    </b>
-                    <em>{item.description}</em>
-                    <i aria-hidden="true">
-                      <small />
-                    </i>
-                  </div>
-                );
-              })}
-            </div>
-          </section>
-
-          <section className="gyaia-module gyaia-thesis-panel" aria-label="投资假设追踪">
-            {moduleHeader('07', '投资假设追踪', '把核心假设、当前证据和下一步观察项分开')}
-            <div className="gyaia-thesis-list">
-              {analysis.investmentHypotheses.map((item) => (
-                <div key={item.title} className={`gyaia-thesis-item status-${hypothesisStatusClass(item.status)}`}>
-                  <div>
-                    <strong>{item.title}</strong>
-                    <span>{item.status}</span>
-                  </div>
-                  <p>{item.evidence}</p>
-                  <em>{item.checkNext}</em>
-                </div>
-              ))}
-            </div>
-          </section>
-
-          <section className="gyaia-module gyaia-news-panel" aria-label="最新相关资讯">
-            {moduleHeader('08', '最新相关资讯', '多源抓取股票新闻、公告与市场资讯，按时间倒序展示')}
-            <div className="gyaia-news-list">
-              {analysis.news.map((item) => {
-                const isPending = item.tone === 'pending' || item.title === '待读取' || item.url === '#';
-                const content = (
-                  <>
-                    <FileText aria-hidden="true" />
-                    <strong className={`gyaia-news-tone tone-${item.tone}`}>
-                      {newsToneLabel(item.tone)}
+                    <span className="gyaia-score-icon">{scoreIcon(score.label)}</span>
+                    <span>{score.label}</span>
+                    <strong style={{ '--score-angle': `${score.score * 36}deg` } as React.CSSProperties}>
+                      {score.score.toFixed(1)}
                     </strong>
-                    <span>{item.title}</span>
-                    <em>{isPending ? '待读取' : `${item.source} · ${item.date}`}</em>
-                    {!isPending ? <ExternalLink aria-hidden="true" /> : null}
-                  </>
-                );
-
-                return isPending ? (
-                  <div key={`${item.source}-${item.title}`} className="gyaia-news-item is-pending">
-                    {content}
                   </div>
-                ) : (
-                  <a
-                    key={`${item.source}-${item.title}`}
-                    href={item.url}
-                    className="gyaia-news-item"
-                    target="_blank"
-                    rel="noreferrer"
-                  >
-                    {content}
-                  </a>
-                );
-              })}
-            </div>
-          </section>
+                ))}
+              </div>
+            </section>
+
+            <section className="gyaia-module gyaia-sniper-panel" aria-label="狙击点位">
+              {moduleHeader('02', '狙击点位', '先看失效位，再等确认位，减少盲目追高')}
+              <div className="gyaia-sniper-list">
+                {analysis.sniperPoints.map((point) => (
+                  <div key={point.label} className="gyaia-sniper-item">
+                    <span>{point.label}</span>
+                    <strong>{formatPrice(point.price)}</strong>
+                    <em>{point.description}</em>
+                  </div>
+                ))}
+              </div>
+            </section>
+
+            <section className="gyaia-module gyaia-trend-panel" aria-label="行业趋势">
+              {moduleHeader('06', '行业趋势', '用 -100% 到 +100% 表达行业方向的量化影响')}
+              <div className="gyaia-trend-head">
+                <span>{industryTrend.theme}</span>
+                <strong>{industryTrend.summary}</strong>
+              </div>
+              <div className="gyaia-trend-list">
+                {industryTrend.items.map((item) => {
+                  const impactScore = trendImpactScore(item);
+                  const impactClass = trendImpactClass(impactScore);
+
+                  return (
+                    <div
+                      key={`${item.tone}-${item.title}`}
+                      className={`gyaia-trend-item tone-${item.tone} impact-${impactClass}`}
+                      style={{ '--trend-impact-width': `${Math.abs(impactScore) / 2}%` } as React.CSSProperties}
+                    >
+                      <span>{trendToneLabel(item.tone)}</span>
+                      <strong>{item.title}</strong>
+                      <b aria-label={`行业趋势量化影响 ${trendImpactLabel(impactScore)} ${formatTrendImpact(impactScore)}`}>
+                        {formatTrendImpact(impactScore)}
+                      </b>
+                      <em>{item.description}</em>
+                      <i aria-hidden="true">
+                        <small />
+                      </i>
+                    </div>
+                  );
+                })}
+              </div>
+            </section>
+
+            <section className="gyaia-module gyaia-quant-panel" aria-label="实时量化数据">
+              {moduleHeader('04', '实时量化数据', '用趋势、波动、量价位置判断当前交易质量')}
+              <div className="gyaia-quant-table" role="table" aria-label="实时量化数据">
+                {analysis.quantMetrics.map((metric) => (
+                  <div key={`${metric.label}-${metric.value}`} className="gyaia-quant-row" role="row">
+                    <span role="cell">{metric.label}</span>
+                    <strong role="cell">{metric.value}</strong>
+                    <em role="cell">{metric.percentile}</em>
+                    <small role="cell">{metric.interpretation}</small>
+                  </div>
+                ))}
+              </div>
+            </section>
+          </div>
+
+          <div className="gyaia-content-column gyaia-content-column-secondary">
+            <section className="gyaia-module gyaia-reason-panel" aria-label="结论依据">
+              {moduleHeader('03', '为什么是这个结论', '把估值、成长、量价和风险拆成可检查依据')}
+              <div className="gyaia-reason-list">
+                {analysis.decisionReasons.map((item) => (
+                  <div key={item.title} className="gyaia-reason-item">
+                    <strong>{item.title}</strong>
+                    <span>{item.description}</span>
+                  </div>
+                ))}
+              </div>
+            </section>
+
+            <section className="gyaia-module gyaia-sector-panel" aria-label="关联板块">
+              {moduleHeader('05', '关联板块', '显示业务相关度，并同步实时板块涨跌')}
+              <div className="gyaia-sector-list">
+                {analysis.relatedSectors.map((sector) => (
+                  <div key={sector.name} className="gyaia-sector-item">
+                    <strong>{sector.name}</strong>
+                    <div className="gyaia-sector-badges">
+                      <span className="gyaia-sector-badge relevance">
+                        相关度 {sector.relevance || sector.heat}
+                      </span>
+                      {sector.realtimeChange ? (
+                        <span className={`gyaia-sector-badge change-${sectorChangeTone(sector.realtimeChange)}`}>
+                          实时 {sector.realtimeBoard && sector.realtimeBoard !== sector.name ? `${sector.realtimeBoard} ` : ''}{sector.realtimeChange}
+                        </span>
+                      ) : null}
+                    </div>
+                    <em>{sector.reason}</em>
+                  </div>
+                ))}
+              </div>
+            </section>
+
+            <section className="gyaia-module gyaia-thesis-panel" aria-label="投资假设追踪">
+              {moduleHeader('07', '投资假设追踪', '把核心假设、当前证据和下一步观察项分开')}
+              <div className="gyaia-thesis-list">
+                {analysis.investmentHypotheses.map((item) => (
+                  <div key={item.title} className={`gyaia-thesis-item status-${hypothesisStatusClass(item.status)}`}>
+                    <div>
+                      <strong>{item.title}</strong>
+                      <span>{hypothesisStatusLabel(item.status)}</span>
+                    </div>
+                    <p>{item.evidence}</p>
+                    <em>{item.checkNext}</em>
+                  </div>
+                ))}
+              </div>
+            </section>
+
+            <section className="gyaia-module gyaia-news-panel" aria-label="最新相关资讯">
+              {moduleHeader('08', '最新相关资讯', '聚合股票新闻、公告与市场资讯，按时间倒序展示')}
+              <div className="gyaia-news-list">
+                {analysis.news.map((item) => {
+                  const isPending = item.tone === 'pending' || item.title === '待读取' || item.url === '#';
+                  const content = (
+                    <>
+                      <FileText aria-hidden="true" />
+                      <strong className={`gyaia-news-tone tone-${item.tone}`}>
+                        {newsToneLabel(item.tone)}
+                      </strong>
+                      <span>{item.title}</span>
+                      <em>{isPending ? '待读取' : `${item.source} · ${item.date}`}</em>
+                      {!isPending ? <ExternalLink aria-hidden="true" /> : null}
+                    </>
+                  );
+
+                  return isPending ? (
+                    <div key={`${item.source}-${item.title}`} className="gyaia-news-item is-pending">
+                      {content}
+                    </div>
+                  ) : (
+                    <a
+                      key={`${item.source}-${item.title}`}
+                      href={item.url}
+                      className="gyaia-news-item"
+                      target="_blank"
+                      rel="noreferrer"
+                    >
+                      {content}
+                    </a>
+                  );
+                })}
+              </div>
+            </section>
+          </div>
         </div>
 
         <footer className="gyaia-footer">

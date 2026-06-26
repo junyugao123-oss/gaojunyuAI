@@ -115,7 +115,7 @@ export type CommercialDataAuditItem = {
 
 export type CommercialInvestmentHypothesis = {
   title: string;
-  status: '成立' | '待确认' | '风险' | '待读取' | string;
+  status: '成立' | '观察中' | '待确认' | '风险' | '待读取' | string;
   evidence: string;
   checkNext: string;
   invalidatedBy: string;
