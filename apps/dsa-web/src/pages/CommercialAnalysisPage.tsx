@@ -342,6 +342,18 @@ const CommercialAnalysisPage: React.FC = () => {
             <span className="gyaia-range-segment gyaia-range-muted" />
             <span className="gyaia-range-segment gyaia-range-fair" />
             <span className="gyaia-range-segment gyaia-range-high" />
+            <span
+              className="gyaia-range-boundary gyaia-range-boundary-low"
+              aria-label={`合理区间下限 ${formatRangeValue(analysis.valuation.low)}`}
+            >
+              <strong>{formatRangeValue(analysis.valuation.low)}</strong>
+            </span>
+            <span
+              className="gyaia-range-boundary gyaia-range-boundary-high"
+              aria-label={`合理区间上限 ${formatRangeValue(analysis.valuation.high)}`}
+            >
+              <strong>{formatRangeValue(analysis.valuation.high)}</strong>
+            </span>
             <span className="gyaia-range-label gyaia-range-label-low">偏低</span>
             <span className="gyaia-range-label gyaia-range-label-fair">合理区间</span>
             <span className="gyaia-range-label gyaia-range-label-high">偏高</span>
