@@ -296,9 +296,6 @@ const CommercialAnalysisPage: React.FC = () => {
               </div>
             ) : null}
           </div>
-          <footer className="gyaia-footer gyaia-footer-single">
-            <p>本产品内容由高君宇个人学习研究开发，仅供参考，不构成投资建议。</p>
-          </footer>
         </section>
       ) : (
       <section className="gyaia-result" aria-label={`${analysis.stock.name}分析结果`}>
@@ -569,7 +566,6 @@ const CommercialAnalysisPage: React.FC = () => {
               <span key={item}>{item}</span>
             ))}
           </div>
-          <p>本产品内容由高君宇个人学习研究开发，仅供参考，不构成投资建议。</p>
         </footer>
       </section>
       )}

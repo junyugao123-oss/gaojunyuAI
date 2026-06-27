@@ -582,7 +582,6 @@ const CommercialLandingPage: React.FC = () => {
                 </div>
               </section>
             </div>
-            <p className="gyai-disclaimer">本产品内容由高君宇个人学习研究开发，仅供参考，不构成投资建议。</p>
           </div>
         </div>
       </section>
