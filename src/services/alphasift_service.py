@@ -849,9 +849,20 @@ class AlphaSiftService:
         refresh: bool = False,
         include_details: bool = False,
     ) -> Dict[str, Any]:
-        _ensure_alphasift_enabled(self.config)
-        _ensure_alphasift_available_for_use()
         provider_name, provider_arg = _resolve_hotspot_provider(provider)
+        try:
+            _ensure_alphasift_enabled(self.config)
+            _ensure_alphasift_available_for_use()
+        except HTTPException as exc:
+            if exc.status_code in {403, 424, 503}:
+                logger.info("AlphaSift hotspots unavailable; returning empty payload: %s", exc.detail)
+                return _empty_alphasift_hotspot_payload(
+                    provider=provider_name,
+                    provider_used=type(provider_arg).__name__,
+                    source_errors=["hotspot_unavailable"],
+                    message="热点推荐暂不可用，已使用行情榜单兜底。",
+                )
+            raise
         top_count = max(1, min(int(top or 12), 50))
         if not refresh:
             cached = _load_alphasift_hotspot_cache(provider=provider_name, top=top_count)

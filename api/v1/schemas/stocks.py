@@ -106,3 +106,22 @@ class StockHistoryResponse(BaseModel):
             "data": []
         }
     })
+
+
+class HotStockItem(BaseModel):
+    """市场热门股条目"""
+
+    rank: Optional[int] = Field(None, description="综合热度排名")
+    code: str = Field(..., description="股票代码")
+    name: str = Field(..., description="股票名称")
+    price: Optional[float] = Field(None, description="最新价")
+    change_percent: Optional[float] = Field(None, description="涨跌幅 (%)")
+    hot_score: Optional[float] = Field(None, description="综合热度分")
+    reason: Optional[str] = Field(None, description="推荐理由")
+
+
+class HotStocksResponse(BaseModel):
+    """市场热门股响应"""
+
+    stocks: List[HotStockItem] = Field(default_factory=list, description="热门股列表")
+    generated_at: Optional[str] = Field(None, description="生成时间")

@@ -22,6 +22,7 @@ from api.deps import get_system_config_service
 from api.v1.schemas.stocks import (
     ExtractFromImageResponse,
     ExtractItem,
+    HotStocksResponse,
     KLineData,
     StockHistoryResponse,
     StockQuote,
@@ -401,6 +402,31 @@ def remove_from_watchlist(
         raise HTTPException(
             status_code=500,
             detail={"error": "internal_error", "message": f"从自选删除失败: {str(e)}"},
+        )
+
+
+@router.get(
+    "/hot-ranking",
+    response_model=HotStocksResponse,
+    responses={
+        200: {"description": "市场热门股"},
+        500: {"description": "服务器错误", "model": ErrorResponse},
+    },
+    summary="获取市场热门股",
+    description="返回按热度、涨跌幅和成交活跃度综合排序的热门股。",
+)
+def get_hot_ranking(
+    limit: int = Query(10, ge=1, le=30, description="返回数量"),
+) -> HotStocksResponse:
+    try:
+        service = StockService()
+        result = service.get_hot_stocks(limit)
+        return HotStocksResponse(**result)
+    except Exception as e:
+        logger.error(f"获取热门股失败: {e}", exc_info=True)
+        raise HTTPException(
+            status_code=500,
+            detail={"error": "internal_error", "message": f"获取热门股失败: {str(e)}"},
         )
 
 

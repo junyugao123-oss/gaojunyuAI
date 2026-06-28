@@ -12,6 +12,7 @@ import {
   Gem,
   Gauge,
   LineChart,
+  Scale,
   Search,
   ShieldCheck,
   Target,
@@ -22,6 +23,7 @@ import type {
   CommercialAnalysis,
   CommercialIndustryTrendItem,
   CommercialScore,
+  CommercialSearchItem,
 } from '../types/commercialAnalysis';
 import './CommercialAnalysisPage.css';
 
@@ -34,10 +36,20 @@ function scoreDepth(score: number): 'very-high' | 'high' | 'medium' | 'low' {
 
 function scoreIcon(label: CommercialScore['label']) {
   if (label === '价值') return <Gem aria-hidden="true" />;
+  if (label === '估值性价比') return <Scale aria-hidden="true" />;
   if (label === '成长') return <BarChart3 aria-hidden="true" />;
   if (label === '盈利能力') return <CircleDollarSign aria-hidden="true" />;
   if (label === '财务') return <ShieldCheck aria-hidden="true" />;
   return <WalletCards aria-hidden="true" />;
+}
+
+function scoreDefinition(label: CommercialScore['label']): string {
+  if (label === '价值') return '看当前价格相对动态估值区间的安全边际。';
+  if (label === '估值性价比') return '看历史估值分位、同业折溢价和隐含预期赔率。';
+  if (label === '成长') return '看未来行业空间、公司护城河与业绩兑现，趋势只作验证。';
+  if (label === '盈利能力') return '看净利率、ROE和利润质量能否持续兑现。';
+  if (label === '财务') return '看现金流、负债率和资产质量是否稳健。';
+  return '看分红、回购、派息等股东回报能力。';
 }
 
 function findSniperPoint(points: CommercialAnalysis['sniperPoints'], label: string) {
@@ -135,14 +147,67 @@ function moduleHeader(index: string, title: string, description: string) {
   );
 }
 
+const ROUTE_STOCK_NAME_HINTS: Record<string, string> = {
+  HK6651: '五一视界',
+  '06651.HK': '五一视界',
+  '688234.SH': '天岳先进',
+  '688795.SH': '摩尔线程-U',
+  '300027.SZ': 'ST华谊',
+};
+
+function normalizeRouteCode(value: string): string {
+  return value.trim().toUpperCase().replace('.SS', '.SH');
+}
+
+function compactRouteCode(value: string): string {
+  return normalizeRouteCode(value).replace(/[^A-Z0-9]/g, '');
+}
+
+function getRouteStockNameHint(routeCode: string): string | null {
+  const normalized = normalizeRouteCode(routeCode);
+  if (ROUTE_STOCK_NAME_HINTS[normalized]) return ROUTE_STOCK_NAME_HINTS[normalized];
+
+  const compact = compactRouteCode(routeCode);
+  const matched = Object.entries(ROUTE_STOCK_NAME_HINTS).find(([code]) => compactRouteCode(code) === compact);
+  return matched?.[1] ?? null;
+}
+
+function formatHeaderTitle(name: string | null | undefined, code: string): string {
+  const normalizedCode = normalizeRouteCode(code);
+  const cleanName = (name || '').trim();
+  if (!cleanName) return normalizedCode;
+  if (compactRouteCode(cleanName) === compactRouteCode(normalizedCode)) return normalizedCode;
+  return `${cleanName} ${normalizedCode}`;
+}
+
 const CommercialAnalysisPage: React.FC = () => {
   const { stockCode } = useParams();
   const navigate = useNavigate();
   const routeCode = stockCode ? decodeURIComponent(stockCode) : 'HK6651';
   const [analysis, setAnalysis] = useState<CommercialAnalysis | null>(null);
+  const [routeStockHint, setRouteStockHint] = useState<CommercialSearchItem | null>(null);
   const [isLoading, setIsLoading] = useState(false);
   const [loadProgress, setLoadProgress] = useState(0);
   const [loadError, setLoadError] = useState<string | null>(null);
+
+  useEffect(() => {
+    let mounted = true;
+    setRouteStockHint(null);
+
+    commercialAnalysisApi.search(routeCode, 1)
+      .then((response) => {
+        if (!mounted) return;
+        setRouteStockHint(response.results[0] ?? null);
+      })
+      .catch(() => {
+        if (!mounted) return;
+        setRouteStockHint(null);
+      });
+
+    return () => {
+      mounted = false;
+    };
+  }, [routeCode]);
 
   useEffect(() => {
     let mounted = true;
@@ -184,11 +249,10 @@ const CommercialAnalysisPage: React.FC = () => {
     };
   }, [routeCode]);
 
-  const topEvidence = useMemo(
-    () => analysis?.recommendation.evidenceSummary.slice(0, 3) ?? [],
-    [analysis]
-  );
-  const displayTitle = analysis ? `${analysis.stock.name} ${analysis.stock.code}` : routeCode.toUpperCase();
+  const routeHintName = routeStockHint?.name || getRouteStockNameHint(routeCode);
+  const displayTitle = analysis
+    ? formatHeaderTitle(analysis.stock.name, analysis.stock.code)
+    : formatHeaderTitle(routeHintName, routeCode);
   const invalidPoint = analysis ? findSniperPoint(analysis.sniperPoints, '失效位') : undefined;
   const confirmPoint = analysis ? findSniperPoint(analysis.sniperPoints, '确认位') : undefined;
   const actionPoints = [invalidPoint, confirmPoint].filter(
@@ -203,9 +267,29 @@ const CommercialAnalysisPage: React.FC = () => {
     latestDate: '待读取',
     description: '资讯池待读取。',
   };
-  const newsHeaderDescription = newsSummary.poolCount > 0
-    ? `已聚合${newsSummary.poolCount}条资讯，精选展示最新${newsSummary.displayCount}条重点`
-    : '资讯池多源聚合，页面精选展示最新重点';
+  const selectedNewsCount = analysis?.news.length || newsSummary.displayCount || 0;
+  const selectedNewsToneCounts = useMemo(() => {
+    const counts = {
+      positive: 0,
+      risk: 0,
+      neutral: 0,
+    };
+
+    (analysis?.news ?? []).forEach((item) => {
+      if (item.tone === 'positive') {
+        counts.positive += 1;
+      } else if (item.tone === 'risk' || item.tone === 'negative') {
+        counts.risk += 1;
+      } else if (item.tone !== 'pending') {
+        counts.neutral += 1;
+      }
+    });
+
+    return counts;
+  }, [analysis?.news]);
+  const newsHeaderDescription = selectedNewsCount > 0
+    ? `大数据精选${selectedNewsCount}条动态资讯，按时间倒序展示`
+    : '大数据精选动态资讯，按时间倒序展示';
   const industryTrend = analysis?.industryTrend ?? {
     theme: '待读取',
     source: 'pending',
@@ -229,7 +313,7 @@ const CommercialAnalysisPage: React.FC = () => {
         <header className="gyaia-nav">
           <Link to="/" className="gyaia-brand" aria-label="返回每日股研AI首页">
             <span className="gyaia-brand-name">每日股研AI</span>
-            <span className="gyaia-brand-subtitle">每日AI新数据 · 实时评估A/H股</span>
+            <span className="gyaia-brand-subtitle">AI量化算法实时评估A/H股</span>
           </Link>
           <nav className="gyaia-nav-right" aria-label="核心能力">
             <span><Database aria-hidden="true" />A/H股全域数据</span>
@@ -312,7 +396,7 @@ const CommercialAnalysisPage: React.FC = () => {
           <div className="gyaia-metric-strip" aria-label="核心行动指标">
             <div>
               <span>当前价</span>
-              <strong>{analysis.stock.currency === 'HKD' ? 'HK$' : '¥'}{formatPrice(analysis.valuation.currentPrice)}</strong>
+              <strong>{formatPrice(analysis.valuation.currentPrice)}</strong>
               <em>{analysis.valuation.pricePosition}</em>
             </div>
             {actionPoints.map((point) => (
@@ -329,9 +413,9 @@ const CommercialAnalysisPage: React.FC = () => {
           <div className="gyaia-range-copy">
             <span>{analysis.valuation.label}</span>
             <strong>
-              {analysis.stock.currency === 'HKD' ? 'HK$' : '¥'}{formatRangeValue(analysis.valuation.low)}
+              {formatRangeValue(analysis.valuation.low)}
               <small> - </small>
-              {analysis.stock.currency === 'HKD' ? 'HK$' : '¥'}{formatRangeValue(analysis.valuation.high)}
+              {formatRangeValue(analysis.valuation.high)}
             </strong>
             <em>{analysis.valuation.currencyLabel}</em>
           </div>
@@ -366,20 +450,23 @@ const CommercialAnalysisPage: React.FC = () => {
 
         <div className="gyaia-content-grid">
           <div className="gyaia-content-column gyaia-content-column-primary">
-            <section className="gyaia-module gyaia-score-panel" aria-label="五维健康评分">
-              {moduleHeader('01', '五维健康评分', '价值、成长、盈利、财务、分红五项拆解')}
+            <section className="gyaia-module gyaia-score-panel" aria-label="六维健康评分">
+              {moduleHeader('01', '六维健康评分', '价值、估值性价比、成长、盈利、财务、分红六项拆解')}
               <div className="gyaia-score-grid">
                 {analysis.scores.map((score) => (
                   <div
                     key={score.label}
                     className={`gyaia-score depth-${scoreDepth(score.score)}`}
-                    title={score.description}
+                    aria-label={`${score.label}评分${score.score.toFixed(1)}，${scoreDefinition(score.label)}`}
                   >
-                    <span className="gyaia-score-icon">{scoreIcon(score.label)}</span>
-                    <span>{score.label}</span>
-                    <strong style={{ '--score-angle': `${score.score * 36}deg` } as React.CSSProperties}>
-                      {score.score.toFixed(1)}
-                    </strong>
+                    <div className="gyaia-score-main">
+                      <span className="gyaia-score-icon">{scoreIcon(score.label)}</span>
+                      <span className="gyaia-score-label">{score.label}</span>
+                      <strong style={{ '--score-angle': `${score.score * 36}deg` } as React.CSSProperties}>
+                        {score.score.toFixed(1)}
+                      </strong>
+                    </div>
+                    <p className="gyaia-score-definition">{scoreDefinition(score.label)}</p>
                   </div>
                 ))}
               </div>
@@ -447,7 +534,7 @@ const CommercialAnalysisPage: React.FC = () => {
 
           <div className="gyaia-content-column gyaia-content-column-secondary">
             <section className="gyaia-module gyaia-reason-panel" aria-label="结论依据">
-              {moduleHeader('03', '为什么是这个结论', '把估值、成长、量价和风险拆成可检查依据')}
+              {moduleHeader('03', '为什么是这个结论', '把建议、估值区间、点位和风险讲清楚')}
               <div className="gyaia-reason-list">
                 {analysis.decisionReasons.map((item) => (
                   <div key={item.title} className="gyaia-reason-item">
@@ -498,25 +585,20 @@ const CommercialAnalysisPage: React.FC = () => {
 
             <section className="gyaia-module gyaia-news-panel" aria-label="最新相关资讯">
               {moduleHeader('08', '最新相关资讯', newsHeaderDescription)}
-              <div className="gyaia-news-summary" aria-label="资讯池概览">
+              <div className="gyaia-news-summary" aria-label="精选资讯概览">
                 <div>
-                  <strong>{newsSummary.poolCount}</strong>
-                  <span>资讯池聚合</span>
-                </div>
-                <div>
-                  <strong>{newsSummary.displayCount}</strong>
-                  <span>当前精选展示</span>
+                  <span>精选{selectedNewsCount}条动态资讯</span>
                 </div>
                 <div className="tone-positive">
-                  <strong>{newsSummary.positiveCount}</strong>
+                  <strong>{selectedNewsToneCounts.positive}</strong>
                   <span>利好</span>
                 </div>
                 <div className="tone-risk">
-                  <strong>{newsSummary.riskCount}</strong>
+                  <strong>{selectedNewsToneCounts.risk}</strong>
                   <span>利空</span>
                 </div>
                 <div className="tone-neutral">
-                  <strong>{newsSummary.neutralCount}</strong>
+                  <strong>{selectedNewsToneCounts.neutral}</strong>
                   <span>中性</span>
                 </div>
               </div>
@@ -556,15 +638,10 @@ const CommercialAnalysisPage: React.FC = () => {
           </div>
         </div>
 
-        <footer className="gyaia-footer">
+        <footer className="gyaia-footer" aria-label="决策引擎说明">
           <div>
             <Target aria-hidden="true" />
             决策引擎：找低估机会 · 等趋势确认 · 设失效位控回撤
-          </div>
-          <div>
-            {topEvidence.map((item) => (
-              <span key={item}>{item}</span>
-            ))}
           </div>
         </footer>
       </section>

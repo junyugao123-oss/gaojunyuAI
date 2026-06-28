@@ -17,6 +17,9 @@ from src.repositories.stock_repo import StockRepository
 
 logger = logging.getLogger(__name__)
 
+_HOT_STOCKS_CACHE: Dict[int, tuple[datetime, Dict[str, Any]]] = {}
+_HOT_STOCKS_CACHE_SECONDS = 45
+
 
 class StockService:
     """
@@ -84,6 +87,97 @@ class StockService:
         except Exception as e:
             logger.error(f"获取实时行情失败: {e}", exc_info=True)
             return None
+
+    def get_hot_stocks(self, limit: int = 10) -> Dict[str, Any]:
+        """
+        获取市场热门股，并用排名、涨跌幅、成交额生成稳定的热度分。
+
+        Args:
+            limit: 返回数量
+
+        Returns:
+            热门股列表
+        """
+        cache_limit = max(1, min(limit, 30))
+        now = datetime.now()
+        cached = _HOT_STOCKS_CACHE.get(cache_limit)
+        if cached and (now - cached[0]).total_seconds() <= _HOT_STOCKS_CACHE_SECONDS:
+            payload = cached[1]
+            return {
+                **payload,
+                "stocks": [dict(item) for item in payload.get("stocks", [])],
+            }
+
+        try:
+            from data_provider.base import DataFetcherManager, normalize_stock_code
+
+            manager = DataFetcherManager()
+            rows = manager.get_hot_stocks(cache_limit)
+        except Exception as e:
+            logger.warning(f"获取市场热门股失败: {e}", exc_info=True)
+            if cached:
+                payload = cached[1]
+                return {
+                    **payload,
+                    "stocks": [dict(item) for item in payload.get("stocks", [])],
+                }
+            rows = []
+
+        stocks: List[Dict[str, Any]] = []
+        seen: set[str] = set()
+        for idx, row in enumerate(rows or [], 1):
+            raw_code = str(row.get("code") or row.get("stock_code") or "").strip()
+            name = str(row.get("name") or row.get("stock_name") or "").strip()
+            if not raw_code or not name:
+                continue
+            try:
+                code = normalize_stock_code(raw_code)
+            except Exception:
+                code = raw_code
+            code_key = code.upper()
+            if code_key in seen:
+                continue
+            seen.add(code_key)
+
+            rank = row.get("rank") if row.get("rank") is not None else idx
+            try:
+                rank_value = int(rank)
+            except (TypeError, ValueError):
+                rank_value = idx
+            change_pct = self._safe_float(row.get("change_pct") or row.get("change_percent"))
+            amount = self._safe_float(row.get("amount"))
+            amount_score = min(16.0, max(0.0, (len(str(int(amount))) - 7) * 2.2)) if amount else 0.0
+            change_score = max(-8.0, min(18.0, (change_pct or 0.0) * 2.1))
+            rank_score = max(0.0, 100.0 - (rank_value - 1) * 4.5)
+            hot_score = max(0.0, min(100.0, rank_score + change_score + amount_score))
+
+            reason_parts = ["热度排名靠前"]
+            if change_pct is not None:
+                reason_parts.append("涨幅活跃" if change_pct >= 0 else "回调仍有关注")
+            if amount:
+                reason_parts.append("成交活跃")
+
+            stocks.append({
+                "rank": rank_value,
+                "code": code,
+                "name": name,
+                "price": self._safe_float(row.get("price")),
+                "change_percent": change_pct,
+                "hot_score": round(hot_score, 1),
+                "reason": " · ".join(reason_parts[:3]),
+            })
+
+        stocks.sort(key=lambda item: (-(item.get("hot_score") or 0), item.get("rank") or 999))
+        result = {
+            "stocks": stocks[:cache_limit],
+            "generated_at": now.isoformat(),
+        }
+        if result["stocks"]:
+            _HOT_STOCKS_CACHE[cache_limit] = (now, {
+                **result,
+                "stocks": [dict(item) for item in result["stocks"]],
+            })
+        return result
     
     def get_history_data(
         self,
@@ -159,6 +253,15 @@ class StockService:
         except Exception as e:
             logger.error(f"获取历史数据失败: {e}", exc_info=True)
             return {"stock_code": stock_code, "period": period, "data": []}
+
+    @staticmethod
+    def _safe_float(value: Any) -> Optional[float]:
+        try:
+            if value is None or value == "":
+                return None
+            return float(value)
+        except (TypeError, ValueError):
+            return None
     
     def _get_placeholder_quote(self, stock_code: str) -> Dict[str, Any]:
         """

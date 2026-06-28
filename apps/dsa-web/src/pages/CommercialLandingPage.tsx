@@ -1,11 +1,13 @@
 import type React from 'react';
-import { useEffect, useMemo, useState } from 'react';
+import { useEffect, useMemo, useRef, useState } from 'react';
 import { useNavigate } from 'react-router-dom';
 import {
   BarChart3,
   Brain,
+  ChevronDown,
   Database,
   FileText,
+  Flame,
   LineChart,
   Search,
   ShieldCheck,
@@ -13,6 +15,8 @@ import {
   Target,
 } from 'lucide-react';
 import { commercialAnalysisApi } from '../api/commercialAnalysis';
+import { alphasiftApi, type AlphaSiftHotspotsResponse, type AlphaSiftHotspotStock } from '../api/alphasift';
+import { stocksApi, type HotStockItem } from '../api/stocks';
 import type { CommercialSearchItem } from '../types/commercialAnalysis';
 import { normalizeQuery } from '../utils/normalizeQuery';
 import './CommercialLandingPage.css';
@@ -53,7 +57,11 @@ type PointPlanItem = {
   tone: 'focus' | 'confirm' | 'risk';
 };
 
-type SearchSuggestion = Pick<CommercialSearchItem, 'name' | 'code' | 'market' | 'aliases'>;
+type SearchSuggestion = Pick<CommercialSearchItem, 'name' | 'code' | 'market' | 'aliases'> & {
+  hotReason?: string;
+  hotScore?: number;
+  isHotStock?: boolean;
+};
 
 const STOCKS: StockProfile[] = [
   {
@@ -61,21 +69,21 @@ const STOCKS: StockProfile[] = [
     code: 'HK6651',
     market: 'H股',
     aliases: ['6651', '6651.HK', 'HK 6651', 'wuyishijie', 'wysj', '五一'],
-    conclusion: 'AI判断：估值抬升至更高合理区间，当前价格处于合理区间下沿。',
-    valuation: '合理偏低',
-    growth: '积极',
+    conclusion: 'AI判断：物理AI龙头，短线承压，等待量价验证。',
+    valuation: '合理上沿',
+    growth: '较高',
     risk: '中等',
     currency: '港元',
-    price: '137.950',
-    rangeStart: 130,
-    rangeMid: 137.95,
-    rangeEnd: 181,
-    rangeLabel: 'AI合理估值区间',
-    pricePosition: '处于合理区间下沿',
+    price: '98.900',
+    rangeStart: 62.978,
+    rangeMid: 98.9,
+    rangeEnd: 103.851,
+    rangeLabel: 'AI动态估值区间',
+    pricePosition: '处于合理区间上沿',
     pointPlan: [
-      { label: '关注区', price: '132-138', description: '观察承接，适合作为第一关注带。', tone: 'focus' },
-      { label: '确认位', price: '146.000', description: '放量站稳后，趋势确认度提升。', tone: 'confirm' },
-      { label: '失效位', price: '118.000', description: '跌破后降级观察，重新评估逻辑。', tone: 'risk' },
+      { label: '关注区', price: '80.752', description: '74.410-87.094附近观察承接，不追高。', tone: 'focus' },
+      { label: '确认位', price: '115.812', description: '放量站上确认位后，趋势修复可信度提升。', tone: 'confirm' },
+      { label: '失效位', price: '71.208', description: '跌破失效位说明短线承接失败，需要降级观察。', tone: 'risk' },
     ],
     evidence: [
       { text: '2025年收入同比增长21.0%，51Aes/51Sim继续扩张', source: '业绩公告' },
@@ -167,6 +175,7 @@ const STOCKS: StockProfile[] = [
 ];
 
 const DEFAULT_STOCK = STOCKS[0];
+const EMPTY_SEARCH_LABEL = '输入股票名称或代码';
 const MARKET_ONLY_QUERIES = new Set(['a', 'a股', 'h', 'h股', 'hk', 'sh', 'sz', 'cn', '沪', '深', '港股']);
 const STOCK_CODE_TARGET_RE = /^(?:HK\d{1,5}|\d{1,5}\.HK|\d{1,5}|\d{6}|(?:SH|SZ|BJ)\d{6}|\d{6}\.(?:SH|SZ|SS|BJ))$/i;
 
@@ -262,6 +271,203 @@ function getLocalSuggestions(query: string): SearchSuggestion[] {
   return matches.slice(0, 5);
 }
 
+function formatSearchDisplayCode(code: string): string {
+  const normalized = code.trim().toUpperCase();
+  const aShareMatch = normalized.match(/^(\d{6})\.(?:SH|SZ|SS|BJ)$/);
+  return aShareMatch?.[1] || normalized;
+}
+
+function getSearchStockLabel(stock: Pick<SearchSuggestion, 'name' | 'code'>): string {
+  return `${stock.name} ${formatSearchDisplayCode(stock.code)}`;
+}
+
+function inferAStockExchange(code: string): string {
+  if (/^[036]/.test(code)) return code.startsWith('6') ? `${code}.SH` : `${code}.SZ`;
+  if (/^[48]/.test(code)) return `${code}.BJ`;
+  return code;
+}
+
+function normalizeHotCandidateCode(value?: string): string {
+  const raw = (value || '').trim().toUpperCase();
+  if (!raw) return '';
+  if (/^\d{6}\.(?:SH|SZ|SS|BJ)$/.test(raw)) return raw.replace('.SS', '.SH');
+  const prefixedAShare = raw.match(/^(SH|SZ|BJ)(\d{6})$/);
+  if (prefixedAShare) return `${prefixedAShare[2]}.${prefixedAShare[1]}`;
+  if (/^\d{6}$/.test(raw)) return inferAStockExchange(raw);
+  return raw.replace(/\s+/g, '');
+}
+
+function inferMarketFromCode(code: string): SearchSuggestion['market'] {
+  const normalized = code.toUpperCase();
+  if (normalized.startsWith('HK') || normalized.endsWith('.HK') || /^\d{1,5}$/.test(normalized)) {
+    return 'H股';
+  }
+  return 'A股';
+}
+
+type HotCandidateRecord = {
+  item: SearchSuggestion;
+  score: number;
+  topicCount: number;
+  leaderCount: number;
+  reasons: Set<string>;
+};
+
+function formatHotChange(changePct?: number | null): string | null {
+  if (changePct === null || changePct === undefined || !Number.isFinite(changePct)) return null;
+  return `${changePct >= 0 ? '涨幅' : '跌幅'}${Math.abs(changePct).toFixed(1)}%`;
+}
+
+function upsertHotCandidate(
+  candidates: Map<string, HotCandidateRecord>,
+  item: SearchSuggestion,
+  score: number,
+  reasons: string[],
+  options: { isLeader?: boolean; isTopicMatch?: boolean } = {},
+): void {
+  const current = candidates.get(item.code);
+  if (!current) {
+    candidates.set(item.code, {
+      item: {
+        ...item,
+        isHotStock: true,
+      },
+      score,
+      topicCount: options.isTopicMatch ? 1 : 0,
+      leaderCount: options.isLeader ? 1 : 0,
+      reasons: new Set(reasons.filter(Boolean)),
+    });
+    return;
+  }
+
+  current.score += Math.max(score * 0.34, 6);
+  current.topicCount += options.isTopicMatch ? 1 : 0;
+  current.leaderCount += options.isLeader ? 1 : 0;
+  reasons.filter(Boolean).forEach((reason) => current.reasons.add(reason));
+  if (score > current.score * 0.72) {
+    current.item = { ...current.item, ...item, isHotStock: true };
+  }
+}
+
+function scoreRankingStock(stock: HotStockItem, index: number): number {
+  const rank = stock.rank ?? index + 1;
+  const rankScore = Math.max(0, 92 - (rank - 1) * 4.2);
+  const hotScore = stock.hotScore ?? 0;
+  const changePct = stock.changePercent ?? 0;
+  return hotScore * 1.15
+    + rankScore
+    + Math.max(0, changePct) * 2.4
+    - Math.max(0, -changePct) * 1.1;
+}
+
+function scoreHotCandidate(
+  stock: AlphaSiftHotspotStock,
+  hotspotScore: number,
+  hotspotTrendScore: number,
+  hotspotChangePct: number,
+  isLeader: boolean,
+): number {
+  const stockScore = stock.hotStockScore ?? 0;
+  const stockChangePct = stock.changePct ?? hotspotChangePct;
+  const amountScore = stock.amount && stock.amount > 0 ? Math.min(18, Math.log10(stock.amount + 1) * 1.8) : 0;
+  const turnoverScore = stock.turnoverRate && stock.turnoverRate > 0 ? Math.min(12, stock.turnoverRate * 1.2) : 0;
+  const volumeRatioScore = stock.volumeRatio && stock.volumeRatio > 0 ? Math.min(10, stock.volumeRatio * 2) : 0;
+
+  return stockScore * 1.2
+    + hotspotScore * 0.42
+    + hotspotTrendScore * 0.28
+    + Math.max(0, stockChangePct) * 2.1
+    - Math.max(0, -stockChangePct) * 1.0
+    + amountScore
+    + turnoverScore
+    + volumeRatioScore
+    + (isLeader ? 18 : 0);
+}
+
+function pickRecommendedHotStock(
+  response?: AlphaSiftHotspotsResponse | null,
+  hotRanking: HotStockItem[] = [],
+): SearchSuggestion | null {
+  const candidates = new Map<string, HotCandidateRecord>();
+  const details = response?.details || {};
+
+  hotRanking.forEach((stock, index) => {
+    const code = normalizeHotCandidateCode(stock.code);
+    const name = (stock.name || '').trim();
+    if (!code || !name || /^(?:指数|板块|概念)$/i.test(name)) return;
+    const reasonParts = [
+      stock.reason || '热度排名靠前',
+      formatHotChange(stock.changePercent),
+    ].filter(Boolean) as string[];
+
+    upsertHotCandidate(
+      candidates,
+      {
+        name,
+        code,
+        market: inferMarketFromCode(code),
+        aliases: [name, code, formatSearchDisplayCode(code)],
+      },
+      scoreRankingStock(stock, index),
+      reasonParts,
+      { isLeader: index < 3 },
+    );
+  });
+
+  (response?.hotspots || []).forEach((hotspot) => {
+    const detail = hotspot.topic ? details[hotspot.topic] : undefined;
+    const leaderStocks = detail?.leaderStocks || [];
+    const leaderCodes = new Set(leaderStocks.map((stock) => normalizeHotCandidateCode(stock.code)).filter(Boolean));
+    const hotStocks = [...leaderStocks, ...(detail?.stocks || [])];
+    const hotspotScore = hotspot.heatScore ?? 0;
+    const hotspotTrendScore = hotspot.trendScore ?? 0;
+    const hotspotChangePct = hotspot.changePct ?? 0;
+    const topicLabel = hotspot.name || hotspot.topic || detail?.canonicalTopic || '热点题材';
+
+    hotStocks.forEach((stock, index) => {
+      const code = normalizeHotCandidateCode(stock.code);
+      const name = (stock.name || '').trim();
+      if (!code || !name || /^(?:指数|板块|概念)$/i.test(name)) return;
+
+      const isLeader = leaderCodes.has(code) || /龙头|核心|领涨|leader/i.test(stock.role || '') || index === 0;
+      const score = scoreHotCandidate(stock, hotspotScore, hotspotTrendScore, hotspotChangePct, isLeader);
+      const changeText = formatHotChange(stock.changePct ?? hotspotChangePct);
+      upsertHotCandidate(
+        candidates,
+        {
+          name,
+          code,
+          market: inferMarketFromCode(code),
+          aliases: [name, code, formatSearchDisplayCode(code), topicLabel],
+        },
+        score,
+        [
+          isLeader ? '题材龙头' : `${topicLabel}活跃`,
+          changeText || '',
+          stock.amount ? '成交活跃' : '',
+        ],
+        { isLeader, isTopicMatch: true },
+      );
+    });
+  });
+
+  const best = Array.from(candidates.values())
+    .sort((a, b) => {
+      const aScore = a.score + a.topicCount * 9 + a.leaderCount * 12;
+      const bScore = b.score + b.topicCount * 9 + b.leaderCount * 12;
+      return bScore - aScore || a.item.code.localeCompare(b.item.code);
+    })[0];
+  if (!best) return null;
+
+  const reason = Array.from(best.reasons).slice(0, 3).join(' · ') || '市场热度靠前';
+  return {
+    ...best.item,
+    hotReason: reason,
+    hotScore: Math.round(Math.min(99, Math.max(1, best.score / 2))),
+    isHotStock: true,
+  };
+}
+
 function normalizeSearchTarget(value: string): string {
   return value.trim().replace(/\s+/g, '').toUpperCase();
 }
@@ -272,22 +478,48 @@ function extractSearchTarget(value: string): string {
   return (match?.[0] || normalized).toUpperCase();
 }
 
-function formatRangePrice(value: number, currency: StockProfile['currency']): string {
-  const prefix = currency === '港元' ? 'HK$' : '¥';
-  return `${prefix}${value.toLocaleString('en-US', {
+function normalizeAnalysisTarget(value: string): string {
+  const normalized = value.trim().toUpperCase();
+  if (/^\d{6}$/.test(normalized)) {
+    return inferAStockExchange(normalized);
+  }
+  if (/^\d{6}\.SS$/.test(normalized)) {
+    return normalized.replace('.SS', '.SH');
+  }
+  return normalized;
+}
+
+function formatRangePrice(value: number): string {
+  return value.toLocaleString('en-US', {
     maximumFractionDigits: 2,
     minimumFractionDigits: 2,
-  })}`;
+  });
+}
+
+function formatPointPrice(value: string): string {
+  return value
+    .split(/([–-])/)
+    .map((part) => (/^\d/.test(part.trim()) ? part.trim() : part))
+    .join('');
 }
 
 const CommercialLandingPage: React.FC = () => {
   const navigate = useNavigate();
+  const landingRef = useRef<HTMLElement | null>(null);
   const previewStock = DEFAULT_STOCK;
+  const [recommendedSearchStock, setRecommendedSearchStock] = useState<SearchSuggestion | null>(null);
   const [query, setQuery] = useState('');
   const [isSearchFocused, setIsSearchFocused] = useState(false);
   const [suggestions, setSuggestions] = useState<SearchSuggestion[]>([]);
   const [suggestionsOpen, setSuggestionsOpen] = useState(false);
   const [highlightedIndex, setHighlightedIndex] = useState(0);
+  const [selectedSearchStock, setSelectedSearchStock] = useState<SearchSuggestion | null>(null);
+  const [showScrollCue, setShowScrollCue] = useState(true);
+
+  const recommendedSearchLabel = recommendedSearchStock
+    ? getSearchStockLabel(recommendedSearchStock)
+    : EMPTY_SEARCH_LABEL;
+  const showRecommendedHotHint = Boolean(recommendedSearchStock && !query.trim() && !isSearchFocused);
 
   useEffect(() => {
     const normalized = normalizeQuery(query);
@@ -319,6 +551,65 @@ const CommercialLandingPage: React.FC = () => {
   }, [query]);
 
   useEffect(() => {
+    let cancelled = false;
+    let latestHotRanking: HotStockItem[] = [];
+
+    const applyRecommendation = (hotspots?: AlphaSiftHotspotsResponse | null) => {
+      if (cancelled) return;
+      const nextRecommendation = pickRecommendedHotStock(hotspots, latestHotRanking);
+      if (nextRecommendation) {
+        setRecommendedSearchStock(nextRecommendation);
+      }
+    };
+
+    stocksApi.getHotRanking(18, 6500)
+      .then((response) => {
+        if (cancelled) return;
+        latestHotRanking = response.stocks || [];
+        applyRecommendation();
+      })
+      .catch(() => {
+        // Keep the local high-quality fallback when realtime hot ranking is unavailable.
+      });
+
+    alphasiftApi.getHotspots({ top: 24, refresh: false, includeDetails: true })
+      .then((response) => applyRecommendation(response))
+      .catch(() => {
+        // Cached hotspots are optional; the realtime refresh below can still update the recommendation.
+      });
+
+    alphasiftApi.getHotspots({ top: 24, refresh: true, includeDetails: true })
+      .then((response) => applyRecommendation(response))
+      .catch(() => {
+        // Keep the best available recommendation when live hotspot refresh is unavailable.
+      });
+
+    return () => {
+      cancelled = true;
+    };
+  }, []);
+
+  useEffect(() => {
+    const container = landingRef.current;
+    if (!container) return undefined;
+
+    const updateScrollCue = () => {
+      const nextVisible = container.scrollTop < Math.max(72, window.innerHeight * 0.12);
+      setShowScrollCue((current) => (current === nextVisible ? current : nextVisible));
+    };
+
+    const frameId = window.requestAnimationFrame(updateScrollCue);
+    const timeoutId = window.setTimeout(updateScrollCue, 240);
+    container.addEventListener('scroll', updateScrollCue, { passive: true });
+
+    return () => {
+      window.cancelAnimationFrame(frameId);
+      window.clearTimeout(timeoutId);
+      container.removeEventListener('scroll', updateScrollCue);
+    };
+  }, []);
+
+  useEffect(() => {
     setHighlightedIndex((current) => Math.min(current, Math.max(0, suggestions.length - 1)));
   }, [suggestions.length]);
 
@@ -342,21 +633,35 @@ const CommercialLandingPage: React.FC = () => {
   }, [previewStock]);
 
   const applyStock = (stock: SearchSuggestion) => {
-    setQuery(`${stock.name} ${stock.code}`);
+    setQuery(getSearchStockLabel(stock));
+    setSelectedSearchStock(stock);
     setSuggestionsOpen(false);
     setHighlightedIndex(0);
   };
 
   const clearDefaultSearchValue = () => {
-    if (query.trim() === `${DEFAULT_STOCK.name} ${DEFAULT_STOCK.code}`) {
+    if (recommendedSearchStock && query.trim() === recommendedSearchLabel) {
       setQuery('');
       setSuggestions([]);
       setSuggestionsOpen(false);
       setHighlightedIndex(0);
+      setSelectedSearchStock(null);
     }
   };
 
   const submitSearch = () => {
+    if (selectedSearchStock && query.trim() === getSearchStockLabel(selectedSearchStock)) {
+      setSuggestionsOpen(false);
+      navigate(`/analysis/${encodeURIComponent(selectedSearchStock.code)}`);
+      return;
+    }
+
+    if (recommendedSearchStock && query.trim() === recommendedSearchLabel) {
+      setSuggestionsOpen(false);
+      navigate(`/analysis/${encodeURIComponent(recommendedSearchStock.code)}`);
+      return;
+    }
+
     const [firstSuggestion] = suggestions;
     if (firstSuggestion) {
       setSuggestionsOpen(false);
@@ -366,13 +671,16 @@ const CommercialLandingPage: React.FC = () => {
 
     const normalizedTarget = extractSearchTarget(query);
     if (!normalizedTarget) {
-      navigate(`/analysis/${encodeURIComponent(DEFAULT_STOCK.code)}`);
+      if (recommendedSearchStock) {
+        navigate(`/analysis/${encodeURIComponent(recommendedSearchStock.code)}`);
+      }
       return;
     }
 
     if (STOCK_CODE_TARGET_RE.test(normalizedTarget) && !isMarketOnlyQuery(normalizedTarget.toLowerCase())) {
+      const analysisTarget = normalizeAnalysisTarget(normalizedTarget);
       setSuggestionsOpen(false);
-      navigate(`/analysis/${encodeURIComponent(normalizedTarget)}`);
+      navigate(`/analysis/${encodeURIComponent(analysisTarget)}`);
       return;
     }
 
@@ -409,14 +717,14 @@ const CommercialLandingPage: React.FC = () => {
   };
 
   return (
-    <main className="gyai-landing">
+    <main className="gyai-landing" ref={landingRef}>
       <section className="gyai-page gyai-intro-page" aria-label="每日股研AI首页">
         <div className="gyai-hero">
           <div className="gyai-hero-bg" aria-hidden="true" />
           <header className="gyai-nav">
             <div className="gyai-brand">
               <span className="gyai-brand-name">每日股研AI</span>
-              <span className="gyai-brand-subtitle">每日AI新数据 · 实时评估A/H股</span>
+              <span className="gyai-brand-subtitle">AI量化算法实时评估A/H股</span>
             </div>
 
             <nav className="gyai-nav-right" aria-label="每日股研AI导航">
@@ -428,92 +736,179 @@ const CommercialLandingPage: React.FC = () => {
             </nav>
           </header>
 
-          <div className="gyai-hero-content">
-            <h1>
-              <span>输入一只股票名称或代码，</span>
-              <span>每日给你最专业的分析</span>
-            </h1>
+          <div className="gyai-hero-stage">
+            <div className="gyai-hero-content">
+              <h1>
+                <span>输入一只股票名称或代码，</span>
+                <span>每日给你最专业的分析</span>
+              </h1>
 
-            <form
-              className="gyai-search"
-              onSubmit={(event) => {
-                event.preventDefault();
-                submitSearch();
-              }}
-            >
-              <div className="gyai-search-input-wrap">
-                <Search className="gyai-search-icon" aria-hidden="true" />
-                <label htmlFor="gyai-stock-search" className="sr-only">输入股票代码或公司名</label>
-                <input
-                  id="gyai-stock-search"
-                  value={query}
-                  onChange={(event) => {
-                    const nextQuery = event.target.value;
-                    setQuery(nextQuery);
-                    setSuggestionsOpen(Boolean(nextQuery.trim()));
-                    setHighlightedIndex(0);
-                  }}
-                  onMouseDown={() => setIsSearchFocused(true)}
-                  onClick={clearDefaultSearchValue}
-                  onFocus={() => {
-                    setIsSearchFocused(true);
-                    setSuggestionsOpen(Boolean(query.trim()));
-                  }}
-                  onDoubleClick={() => applyStock(DEFAULT_STOCK)}
-                  onBlur={() => window.setTimeout(() => {
-                    setIsSearchFocused(false);
-                    setSuggestionsOpen(false);
-                  }, 140)}
-                  onKeyDown={handleSearchKeyDown}
-                  placeholder={isSearchFocused ? '' : `${DEFAULT_STOCK.name} ${DEFAULT_STOCK.code}`}
-                  autoComplete="off"
-                />
-                <span className="gyai-search-example">
-                  例如：五一视界/HK6651，摩尔线程-U/688795
-                </span>
+              <form
+                className="gyai-search"
+                onSubmit={(event) => {
+                  event.preventDefault();
+                  submitSearch();
+                }}
+              >
+                <div className={`gyai-search-input-wrap${showRecommendedHotHint ? ' has-hot-badge' : ''}`}>
+                  <Search className="gyai-search-icon" aria-hidden="true" />
+                  <label htmlFor="gyai-stock-search" className="sr-only">输入股票代码或公司名</label>
+                  {showRecommendedHotHint ? (
+                    <span className="gyai-search-hot-badge" aria-label="今日热门股">
+                      <Flame aria-hidden="true" />
+                      今日热门股
+                    </span>
+                  ) : null}
+                  <input
+                    id="gyai-stock-search"
+                    value={query}
+                    onChange={(event) => {
+                      const nextQuery = event.target.value;
+                      setQuery(nextQuery);
+                      setSelectedSearchStock(null);
+                      setSuggestionsOpen(Boolean(nextQuery.trim()));
+                      setHighlightedIndex(0);
+                    }}
+                    onMouseDown={() => setIsSearchFocused(true)}
+                    onClick={clearDefaultSearchValue}
+                    onFocus={() => {
+                      setIsSearchFocused(true);
+                      setSuggestionsOpen(Boolean(query.trim()));
+                    }}
+                    onDoubleClick={() => {
+                      if (recommendedSearchStock) {
+                        applyStock(recommendedSearchStock);
+                      }
+                    }}
+                    onBlur={() => window.setTimeout(() => {
+                      setIsSearchFocused(false);
+                      setSuggestionsOpen(false);
+                    }, 140)}
+                    onKeyDown={handleSearchKeyDown}
+                    placeholder={isSearchFocused ? '' : recommendedSearchLabel}
+                    autoComplete="off"
+                  />
+                  <span className="gyai-search-example">
+                    例如：五一视界/HK6651，摩尔线程-U/688795
+                  </span>
 
-              </div>
-
-              {suggestionsOpen && suggestions.length > 0 ? (
-                <div className="gyai-suggestions" role="listbox" aria-label="股票搜索建议">
-                  {suggestions.map((stock, index) => (
-                    <button
-                      key={`${stock.code}-${stock.name}`}
-                      type="button"
-                      role="option"
-                      aria-selected={index === highlightedIndex}
-                      className={index === highlightedIndex ? 'is-active' : undefined}
-                      onMouseEnter={() => setHighlightedIndex(index)}
-                      onMouseDown={(event) => {
-                        event.preventDefault();
-                        applyStock(stock);
-                      }}
-                    >
-                      <span>
-                        <strong>{stock.name}</strong>
-                        <small>{stock.code}</small>
-                      </span>
-                      <em>{stock.market}</em>
-                    </button>
-                  ))}
                 </div>
-              ) : null}
 
-              <button type="submit" className="gyai-analyze-button">分析</button>
-            </form>
+                {suggestionsOpen && suggestions.length > 0 ? (
+                  <div className="gyai-suggestions" role="listbox" aria-label="股票搜索建议">
+                    {suggestions.map((stock, index) => (
+                      <button
+                        key={`${stock.code}-${stock.name}`}
+                        type="button"
+                        role="option"
+                        aria-selected={index === highlightedIndex}
+                        className={index === highlightedIndex ? 'is-active' : undefined}
+                        onMouseEnter={() => setHighlightedIndex(index)}
+                        onMouseDown={(event) => {
+                          event.preventDefault();
+                          applyStock(stock);
+                        }}
+                      >
+                        <span>
+                          <strong>{stock.name}</strong>
+                          <small>{stock.code}</small>
+                        </span>
+                        <em>{stock.market}</em>
+                      </button>
+                    ))}
+                  </div>
+                ) : null}
 
-            <p className="gyai-hero-support">支持A股 / H股 · 数据实时更新</p>
+                <button type="submit" className="gyai-analyze-button">分析</button>
+              </form>
+
+              <p className="gyai-hero-support">支持A股 / H股 · 数据实时更新</p>
+              <div className="gyai-hero-proof" aria-label="每日股研AI输出内容">
+                <article>
+                  <span>01</span>
+                  <strong>每日行情雷达</strong>
+                  <small>价格、成交、波动实时刷新</small>
+                </article>
+                <article>
+                  <span>02</span>
+                  <strong>AI估值引擎</strong>
+                  <small>区间定价 + 安全边际</small>
+                </article>
+                <article>
+                  <span>03</span>
+                  <strong>点位作战计划</strong>
+                  <small>关注、确认、失效一步到位</small>
+                </article>
+                <article>
+                  <span>04</span>
+                  <strong>资讯证据链</strong>
+                  <small>公告、板块、新闻联动验证</small>
+                </article>
+              </div>
+            </div>
+
+            <aside className="gyai-hero-digest" aria-label="五一视界示例摘要">
+              <p className="gyai-digest-kicker">示例</p>
+              <div className="gyai-digest-title">
+                <strong>{previewStock.name}</strong>
+                <span>{previewStock.code}</span>
+              </div>
+              <p className="gyai-digest-conclusion">{previewStock.conclusion.replace('AI判断：', '')}</p>
+              <div className="gyai-digest-tags" aria-label="示例核心指标">
+                <span>估值 <strong>{previewStock.valuation}</strong></span>
+                <span>成长 <strong>{previewStock.growth}</strong></span>
+                <span>风险 <strong>{previewStock.risk}</strong></span>
+              </div>
+              <div className="gyai-digest-range" aria-label="示例估值区间">
+                <div>
+                  <span>AI合理估值</span>
+                  <strong>
+                    {formatRangePrice(previewStock.rangeStart)}
+                    <small> - </small>
+                    {formatRangePrice(previewStock.rangeEnd)}
+                  </strong>
+                </div>
+                <em>{previewStock.pricePosition}</em>
+              </div>
+              <div className="gyai-digest-bottom" aria-label="示例当前价格与确认位">
+                <div className="gyai-digest-point">
+                  <span>当前价</span>
+                  <strong>{previewStock.price}</strong>
+                  <em>{previewStock.pricePosition}</em>
+                </div>
+                <div className="gyai-digest-point">
+                  <span>确认位</span>
+                  <strong>{formatPointPrice(previewStock.pointPlan[1].price)}</strong>
+                  <em>{previewStock.pointPlan[1].description}</em>
+                </div>
+              </div>
+            </aside>
           </div>
+
+          {showScrollCue ? (
+            <a
+              className="gyai-scroll-cue"
+              href="#gyai-example-preview"
+              aria-label="查看示例预览"
+              onClick={() => setShowScrollCue(false)}
+            >
+              <span className="gyai-scroll-cue-stack" aria-hidden="true">
+                <ChevronDown />
+                <ChevronDown />
+                <ChevronDown />
+              </span>
+            </a>
+          ) : null}
         </div>
 
-        <div className="gyai-preview" role="region" aria-label="股票分析预览">
+        <div id="gyai-example-preview" className="gyai-preview" role="region" aria-label="股票分析预览">
           <div className="gyai-preview-inner">
             <p
               className="gyai-preview-kicker notranslate"
               data-copy-version={LANDING_COPY_VERSION}
               translate="no"
             >
-              示例预览 · {previewStock.name} {previewStock.code}
+              示例 · {previewStock.name} {previewStock.code}
             </p>
             <h2>{previewStock.conclusion.replace('AI判断：', '')}</h2>
 
@@ -527,9 +922,9 @@ const CommercialLandingPage: React.FC = () => {
               <div className="gyai-range-copy">
                 <span>{previewStock.rangeLabel}</span>
                 <strong>
-                  {formatRangePrice(previewStock.rangeStart, previewStock.currency)}
+                  {formatRangePrice(previewStock.rangeStart)}
                   <small> - </small>
-                  {formatRangePrice(previewStock.rangeEnd, previewStock.currency)}
+                  {formatRangePrice(previewStock.rangeEnd)}
                 </strong>
                 <em>{previewStock.currency}/股</em>
               </div>
@@ -537,6 +932,18 @@ const CommercialLandingPage: React.FC = () => {
                 <span className="gyai-range-segment gyai-range-segment-muted" />
                 <span className="gyai-range-segment gyai-range-segment-copper" />
                 <span className="gyai-range-segment gyai-range-segment-red" />
+                <span
+                  className="gyai-range-boundary gyai-range-boundary-low"
+                  aria-label={`合理区间下限 ${formatRangePrice(previewStock.rangeStart)}`}
+                >
+                  <strong>{formatRangePrice(previewStock.rangeStart)}</strong>
+                </span>
+                <span
+                  className="gyai-range-boundary gyai-range-boundary-high"
+                  aria-label={`合理区间上限 ${formatRangePrice(previewStock.rangeEnd)}`}
+                >
+                  <strong>{formatRangePrice(previewStock.rangeEnd)}</strong>
+                </span>
                 <span className="gyai-range-legend gyai-range-legend-low">偏低</span>
                 <span className="gyai-range-legend gyai-range-legend-fair">合理区间</span>
                 <span className="gyai-range-legend gyai-range-legend-high">偏高</span>
@@ -562,7 +969,7 @@ const CommercialLandingPage: React.FC = () => {
                   {previewStock.pointPlan.map((item) => (
                     <div className={`gyai-point-plan-item is-${item.tone}`} key={item.label}>
                       <span>{item.label}</span>
-                      <strong>{item.price}</strong>
+                      <strong>{formatPointPrice(item.price)}</strong>
                       <em>{item.description}</em>
                     </div>
                   ))}
@@ -570,7 +977,7 @@ const CommercialLandingPage: React.FC = () => {
               </section>
 
               <section className="gyai-evidence-panel" aria-label="关键依据">
-                <h3>关键依据（部分）</h3>
+                <h3>关键依据（仅部分）</h3>
                 <div className="gyai-evidence-list">
                   {previewStock.evidence.map((item) => (
                     <div className="gyai-evidence-item" key={`${item.source}-${item.text}`}>

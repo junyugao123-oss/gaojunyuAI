@@ -47,7 +47,7 @@ class CommercialValuationRange(BaseModel):
 
 
 class CommercialScore(BaseModel):
-    """Five-dimensional health score."""
+    """Six-dimensional health score."""
 
     label: str
     score: float
