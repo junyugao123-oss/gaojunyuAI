@@ -232,34 +232,34 @@ body:has(.gyai-landing) {
   position: relative;
   z-index: 60;
   display: grid;
-  grid-template-columns: minmax(0, 1fr) 112px;
-  gap: 12px;
-  width: min(100%, 860px);
+  grid-template-columns: minmax(0, 1fr) 104px;
+  gap: 8px;
+  width: min(100%, 840px);
   margin-top: 26px;
-  padding: 10px;
+  padding: 7px 8px 7px 18px;
   border: 1px solid rgba(173, 113, 62, 0.36);
-  border-radius: 13px;
-  background: #fffdf8;
+  border-radius: 999px;
+  background: rgba(255, 253, 248, 0.98);
   box-shadow:
-    0 26px 68px rgba(0, 0, 0, 0.22),
+    0 22px 56px rgba(0, 0, 0, 0.22),
     0 0 0 1px rgba(255, 255, 255, 0.5) inset;
 }
 
 .gyai-search-input-wrap {
   position: relative;
   display: grid;
-  grid-template-columns: 36px minmax(0, 1fr);
+  grid-template-columns: 30px minmax(0, 1fr);
   align-items: center;
-  min-height: 62px;
+  min-height: 46px;
 }
 
 .gyai-search-input-wrap.has-hot-badge {
-  grid-template-columns: 36px auto minmax(0, 1fr);
+  grid-template-columns: 30px auto minmax(0, 1fr);
 }
 
 .gyai-search-icon {
-  width: 24px;
-  height: 24px;
+  width: 22px;
+  height: 22px;
   color: #9a958f;
 }
 
@@ -312,23 +312,12 @@ body:has(.gyai-landing) {
   outline: none;
 }
 
-.gyai-search-example {
-  grid-column: 2 / -1;
-  justify-self: start;
-  margin-top: 5px;
-  color: #928b84;
-  font-size: 14px;
-  font-family: inherit;
-  line-height: 1.2;
-  text-align: left;
-}
-
 .gyai-analyze-button {
   align-self: center;
   justify-self: stretch;
-  height: 40px;
+  height: 42px;
   border: 0;
-  border-radius: 12px;
+  border-radius: 999px;
   background: #b83a2a;
   color: #ffffff;
   font-size: 16px;
@@ -1542,25 +1531,27 @@ body:has(.gyai-landing) {
   }
 
   .gyai-search {
-    grid-template-columns: 1fr;
-    margin-top: 28px;
-    padding: 12px;
-    border-radius: 18px;
+    grid-template-columns: minmax(0, 1fr) 88px;
+    gap: 6px;
+    width: min(100%, 560px);
+    margin-top: 22px;
+    padding: 6px 7px 6px 12px;
+    border-radius: 999px;
   }
 
   .gyai-search-input-wrap {
-    min-height: 54px;
-    grid-template-columns: 34px minmax(0, 1fr);
+    min-height: 42px;
+    grid-template-columns: 26px minmax(0, 1fr);
   }
 
   .gyai-search-input-wrap.has-hot-badge {
-    grid-template-columns: 34px auto minmax(0, 1fr);
+    grid-template-columns: 26px auto minmax(0, 1fr);
   }
 
   .gyai-search-hot-badge {
-    max-width: 78px;
+    max-width: 88px;
     gap: 3px;
-    margin-right: 5px;
+    margin-right: 6px;
     padding: 3px 6px;
     font-size: 10px;
   }
@@ -1576,10 +1567,10 @@ body:has(.gyai-landing) {
   }
 
   .gyai-analyze-button {
-    justify-self: end;
-    width: 116px;
+    justify-self: stretch;
+    width: auto;
     height: 38px;
-    font-size: 16px;
+    font-size: 15px;
   }
 
   .gyai-preview-inner {
@@ -1716,13 +1707,7 @@ body:has(.gyai-landing) {
   }
 
   .gyai-search input {
-    font-size: 16px;
-  }
-
-  .gyai-search-example {
-    grid-column: 1 / -1;
-    margin: 0 0 0 34px;
-    font-size: 12px;
+    font-size: 15px;
   }
 
   .gyai-search-hot-badge {
@@ -1735,10 +1720,9 @@ body:has(.gyai-landing) {
   }
 
   .gyai-analyze-button {
-    width: 104px;
     height: 36px;
-    border-radius: 12px;
-    font-size: 15px;
+    border-radius: 999px;
+    font-size: 14px;
   }
 
   .gyai-preview h2 {
@@ -1822,7 +1806,9 @@ body:has(.gyai-landing) {
   }
 
   .gyai-search {
-    margin-top: 24px;
+    grid-template-columns: minmax(0, 1fr) 78px;
+    margin-top: 22px;
+    padding-left: 10px;
   }
 
   .gyai-suggestions {

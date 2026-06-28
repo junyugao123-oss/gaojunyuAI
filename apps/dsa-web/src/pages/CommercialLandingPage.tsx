@@ -788,9 +788,6 @@ const CommercialLandingPage: React.FC = () => {
                     placeholder={isSearchFocused ? '' : recommendedSearchLabel}
                     autoComplete="off"
                   />
-                  <span className="gyai-search-example">
-                    例如：五一视界/HK6651，摩尔线程-U/688795
-                  </span>
 
                 </div>
 

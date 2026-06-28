@@ -15,7 +15,6 @@ import {
   Scale,
   Search,
   ShieldCheck,
-  Target,
   WalletCards,
 } from 'lucide-react';
 import { commercialAnalysisApi } from '../api/commercialAnalysis';
@@ -145,6 +144,94 @@ function moduleHeader(index: string, title: string, description: string) {
       </div>
     </div>
   );
+}
+
+function getScore(analysis: CommercialAnalysis, label: string): number | null {
+  const item = analysis.scores.find((score) => score.label === label);
+  return typeof item?.score === 'number' ? item.score : null;
+}
+
+function buildDecisionEngineSteps(
+  analysis: CommercialAnalysis,
+  invalidPoint?: CommercialAnalysis['sniperPoints'][number],
+  confirmPoint?: CommercialAnalysis['sniperPoints'][number],
+) {
+  const { currentPrice, low, high, markerPercent } = analysis.valuation;
+  const currentPriceText = formatPrice(currentPrice);
+  const lowText = formatRangeValue(low);
+  const highText = formatRangeValue(high);
+  const confirmText = confirmPoint ? formatPrice(confirmPoint.price) : '确认位';
+  const invalidText = invalidPoint ? formatPrice(invalidPoint.price) : '失效位';
+  const range = Math.max(0.01, high - low);
+  const relativePosition = (currentPrice - low) / range;
+  const growthScore = getScore(analysis, '成长') ?? 5;
+  const qualityScore = getScore(analysis, '盈利能力') ?? 5;
+  const financeScore = getScore(analysis, '财务') ?? 5;
+  const recommendationText = `${analysis.recommendation.action} ${analysis.recommendation.summary}`;
+  const isCautious = /谨慎|观察|风险|承压|不追高/.test(recommendationText);
+
+  let currentAction = '观察为主';
+  let currentDescription = '先看价格是否继续稳定在合理区间附近，避免在趋势没有确认前主动追高。';
+
+  if (currentPrice < low) {
+    currentAction = growthScore >= 6 ? '低吸跟踪' : '等待修复';
+    currentDescription = growthScore >= 6
+      ? `当前价${currentPriceText}低于估值区间${lowText}-${highText}，若基本面没有恶化，可作为第一关注池，分批观察承接。`
+      : `当前价${currentPriceText}虽低于估值区间${lowText}-${highText}，但成长或基本面弹性不足，先等止跌和资金回流。`;
+  } else if (currentPrice <= high) {
+    if (relativePosition <= 0.38 && growthScore >= 6) {
+      currentAction = isCautious ? '轻仓试错' : '分批低吸';
+      currentDescription = `当前价${currentPriceText}处在估值区间${lowText}-${highText}偏安全位置，适合小仓位观察，等量价确认再提高仓位。`;
+    } else if (relativePosition >= 0.78 || isCautious) {
+      currentAction = '持有观察';
+      currentDescription = `当前价${currentPriceText}接近区间上沿${highText}，赔率下降，适合已有仓位观察，不适合新增追高。`;
+    } else {
+      currentAction = '轻仓跟踪';
+      currentDescription = `当前价${currentPriceText}处在估值区间${lowText}-${highText}中部，先保留观察仓，等待趋势和成交量给方向。`;
+    }
+  } else if (currentPrice > high) {
+    currentAction = growthScore >= 8 && qualityScore >= 6 ? '强股等回落' : '不追高';
+    currentDescription = growthScore >= 8 && qualityScore >= 6
+      ? `当前价${currentPriceText}高于区间上沿${highText}，说明市场已提前定价成长性，等回落或业绩继续兑现。`
+      : `当前价${currentPriceText}高于区间上沿${highText}，安全边际不足，优先等待回撤或新的业绩证据。`;
+  }
+
+  const entryValue = currentPrice <= high && growthScore >= 6 ? '分批低吸' : '只等机会';
+  const addValue = confirmPoint && markerPercent < 82 && growthScore >= 6 ? '确认后加' : '暂不加仓';
+  const riskValue = invalidPoint || financeScore < 4 ? '跌破撤退' : '设线防守';
+
+  return [
+    {
+      label: '今日动作',
+      value: currentAction,
+      description: currentDescription,
+      tone: currentAction.includes('不追高') || currentAction.includes('等待') ? 'watch' : 'positive',
+    },
+    {
+      label: '入场纪律',
+      value: entryValue,
+      description: entryValue === '分批低吸'
+        ? `只在价格回落到${lowText}-${highText}区间内且有承接时分批参与，不一次打满仓位。`
+        : `当前不急于开新仓，先等价格回到${lowText}-${highText}区间，或等趋势与消息面共振。`,
+      tone: entryValue === '分批低吸' ? 'positive' : 'watch',
+    },
+    {
+      label: '加仓节奏',
+      value: addValue,
+      description: addValue === '确认后加'
+        ? `放量站上${confirmText}并维持强势后再提高仓位，让市场先证明趋势修复。`
+        : `没有站上${confirmText}前不主动加仓，避免把普通反弹误判为趋势反转。`,
+      tone: addValue === '确认后加' ? 'positive' : 'watch',
+    },
+    {
+      label: '风险撤退',
+      value: riskValue,
+      description: financeScore < 4
+        ? `财务或盈利质量偏弱时，若跌破${invalidText}应先撤退，避免亏损扩大。`
+        : `若跌破${invalidText}，先降低仓位或离场，等重新站稳后再评估。`,
+      tone: 'risk',
+    },
+  ];
 }
 
 const ROUTE_STOCK_NAME_HINTS: Record<string, string> = {
@@ -305,6 +392,9 @@ const CommercialAnalysisPage: React.FC = () => {
       },
     ],
   };
+  const decisionEngineSteps = analysis
+    ? buildDecisionEngineSteps(analysis, invalidPoint, confirmPoint)
+    : [];
 
   return (
     <main className="gyai-analysis-page">
@@ -448,10 +538,23 @@ const CommercialAnalysisPage: React.FC = () => {
           </div>
         </div>
 
+        <section className="gyaia-module gyaia-decision-panel" aria-label="决策引擎">
+          {moduleHeader('01', '决策引擎', '先给今天的操作结论，再看后面的数据拆解')}
+          <div className="gyaia-decision-chain">
+            {decisionEngineSteps.map((step) => (
+              <div key={step.label} className={`gyaia-decision-step tone-${step.tone}`}>
+                <span>{step.label}</span>
+                <strong>{step.value}</strong>
+                <em>{step.description}</em>
+              </div>
+            ))}
+          </div>
+        </section>
+
         <div className="gyaia-content-grid">
           <div className="gyaia-content-column gyaia-content-column-primary">
             <section className="gyaia-module gyaia-score-panel" aria-label="六维健康评分">
-              {moduleHeader('01', '六维健康评分', '价值、估值性价比、成长、盈利、财务、分红六项拆解')}
+              {moduleHeader('02', '六维健康评分', '价值、估值性价比、成长、盈利、财务、分红六项拆解')}
               <div className="gyaia-score-grid">
                 {analysis.scores.map((score) => (
                   <div
@@ -473,7 +576,7 @@ const CommercialAnalysisPage: React.FC = () => {
             </section>
 
             <section className="gyaia-module gyaia-sniper-panel" aria-label="狙击点位">
-              {moduleHeader('02', '狙击点位', '先看失效位，再等确认位，减少盲目追高')}
+              {moduleHeader('03', '狙击点位', '先看失效位，再等确认位，减少盲目追高')}
               <div className="gyaia-sniper-list">
                 {analysis.sniperPoints.map((point) => (
                   <div key={point.label} className="gyaia-sniper-item">
@@ -486,7 +589,7 @@ const CommercialAnalysisPage: React.FC = () => {
             </section>
 
             <section className="gyaia-module gyaia-trend-panel" aria-label="行业趋势">
-              {moduleHeader('06', '行业趋势', '用 -100% 到 +100% 表达行业方向的量化影响')}
+              {moduleHeader('07', '行业趋势', '用 -100% 到 +100% 表达行业方向的量化影响')}
               <div className="gyaia-trend-head">
                 <span>{industryTrend.theme}</span>
                 <strong>{industryTrend.summary}</strong>
@@ -518,7 +621,7 @@ const CommercialAnalysisPage: React.FC = () => {
             </section>
 
             <section className="gyaia-module gyaia-quant-panel" aria-label="实时量化数据">
-              {moduleHeader('04', '实时量化数据', '用趋势、波动、量价位置判断当前交易质量')}
+              {moduleHeader('05', '实时量化数据', '用趋势、波动、量价位置判断当前交易质量')}
               <div className="gyaia-quant-table" role="table" aria-label="实时量化数据">
                 {analysis.quantMetrics.map((metric) => (
                   <div key={`${metric.label}-${metric.value}`} className="gyaia-quant-row" role="row">
@@ -534,7 +637,7 @@ const CommercialAnalysisPage: React.FC = () => {
 
           <div className="gyaia-content-column gyaia-content-column-secondary">
             <section className="gyaia-module gyaia-reason-panel" aria-label="结论依据">
-              {moduleHeader('03', '为什么是这个结论', '把建议、估值区间、点位和风险讲清楚')}
+              {moduleHeader('04', '为什么是这个结论', '把建议、估值区间、点位和风险讲清楚')}
               <div className="gyaia-reason-list">
                 {analysis.decisionReasons.map((item) => (
                   <div key={item.title} className="gyaia-reason-item">
@@ -546,7 +649,7 @@ const CommercialAnalysisPage: React.FC = () => {
             </section>
 
             <section className="gyaia-module gyaia-sector-panel" aria-label="关联板块">
-              {moduleHeader('05', '关联板块', '显示业务相关度，并同步实时板块涨跌')}
+              {moduleHeader('06', '关联板块', '显示业务相关度，并同步实时板块涨跌')}
               <div className="gyaia-sector-list">
                 {analysis.relatedSectors.map((sector) => (
                   <div key={sector.name} className="gyaia-sector-item">
@@ -568,7 +671,7 @@ const CommercialAnalysisPage: React.FC = () => {
             </section>
 
             <section className="gyaia-module gyaia-thesis-panel" aria-label="投资假设追踪">
-              {moduleHeader('07', '投资假设追踪', '把核心假设、当前证据和下一步观察项分开')}
+              {moduleHeader('08', '投资假设追踪', '把核心假设、当前证据和下一步观察项分开')}
               <div className="gyaia-thesis-list">
                 {analysis.investmentHypotheses.map((item) => (
                   <div key={item.title} className={`gyaia-thesis-item status-${hypothesisStatusClass(item.status)}`}>
@@ -584,7 +687,7 @@ const CommercialAnalysisPage: React.FC = () => {
             </section>
 
             <section className="gyaia-module gyaia-news-panel" aria-label="最新相关资讯">
-              {moduleHeader('08', '最新相关资讯', newsHeaderDescription)}
+              {moduleHeader('09', '最新相关资讯', newsHeaderDescription)}
               <div className="gyaia-news-summary" aria-label="精选资讯概览">
                 <div>
                   <span>精选{selectedNewsCount}条动态资讯</span>
@@ -637,13 +740,6 @@ const CommercialAnalysisPage: React.FC = () => {
             </section>
           </div>
         </div>
-
-        <footer className="gyaia-footer" aria-label="决策引擎说明">
-          <div>
-            <Target aria-hidden="true" />
-            决策引擎：找低估机会 · 等趋势确认 · 设失效位控回撤
-          </div>
-        </footer>
       </section>
       )}
     </main>
