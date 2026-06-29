@@ -847,7 +847,7 @@ const StockScreeningPage: React.FC = () => {
         <InlineAlert
           variant="info"
           title="AlphaSift 未开启"
-          message="点击后写入 ALPHASIFT_ENABLED=true；AlphaSift 已随后端依赖安装，若适配层缺失请先更新依赖或重建后端。"
+          message="点击后写入 ALPHASIFT_ENABLED=true；AlphaSift 是可选选股扩展，若适配层缺失请先安装 requirements-alphasift.txt，或使用服务端 /install 接口修复后重启。"
           action={
             <Button size="sm" isLoading={enabling} loadingText="开启中..." onClick={() => void handleEnable()}>
               开启 AlphaSift
@@ -860,7 +860,7 @@ const StockScreeningPage: React.FC = () => {
         <InlineAlert
           variant="warning"
           title="AlphaSift 适配层不可用"
-          message="适配层当前不可用，请先确认后端已安装依赖并重启服务，必要时执行 pip install -r requirements.txt 或使用设置页/服务端 /install 接口进行修复安装。"
+          message="适配层当前不可用，请先确认可选依赖已安装并重启服务，必要时执行 pip install -r requirements-alphasift.txt 或使用设置页/服务端 /install 接口进行修复安装。"
         />
       ) : null}
 

@@ -157,7 +157,7 @@ describe('StockScreeningPage', () => {
         available: false,
         installSpecIsDefault: true,
       });
-    enableAlphaSift.mockRejectedValueOnce(new Error('AlphaSift 适配层不可用。请执行 pip install -r requirements.txt'));
+    enableAlphaSift.mockRejectedValueOnce(new Error('AlphaSift 适配层不可用。请执行 pip install -r requirements-alphasift.txt'));
 
     render(<StockScreeningPage />);
 
@@ -170,7 +170,7 @@ describe('StockScreeningPage', () => {
     expect(screen.getByText('选股未开启')).toBeInTheDocument();
     expect(screen.getByRole('button', { name: /运行选股/ })).toBeDisabled();
     expect(screen.getByText(/适配层当前不可用/)).toBeInTheDocument();
-    expect(screen.getByText('AlphaSift 适配层不可用。请执行 pip install -r requirements.txt')).toBeInTheDocument();
+    expect(screen.getByText('AlphaSift 适配层不可用。请执行 pip install -r requirements-alphasift.txt')).toBeInTheDocument();
   });
 
   it('loads AlphaSift hotspot themes on demand', async () => {

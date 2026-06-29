@@ -86,7 +86,7 @@ describe('alphasiftApi', () => {
       },
     });
 
-    await expect(alphasiftApi.enable()).rejects.toThrow('pip install -r requirements.txt');
+    await expect(alphasiftApi.enable()).rejects.toThrow('pip install -r requirements-alphasift.txt');
 
     expect(updateConfig).toHaveBeenNthCalledWith(1, {
       configVersion: 'v1',

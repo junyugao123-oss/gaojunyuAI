@@ -334,7 +334,7 @@ export const alphasiftApi = {
       const status = await alphasiftApi.getStatus();
       if (!status.available) {
         const reason = status.diagnostics?.reason ? `（${status.diagnostics.reason}）` : '';
-        throw new Error(`AlphaSift 适配层不可用${reason}。请确认后端已安装项目依赖，必要时执行 pip install -r requirements.txt 或重建 Docker/桌面后端。`);
+        throw new Error(`AlphaSift 适配层不可用${reason}。该能力是可选选股扩展，必要时执行 pip install -r requirements-alphasift.txt，或调用服务端 /api/v1/alphasift/install 修复安装后重启。`);
       }
     } catch (error) {
       try {

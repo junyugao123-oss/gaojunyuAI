@@ -126,6 +126,12 @@ cd /opt/stock-analyzer
 pip install -r requirements.txt -i https://pypi.tuna.tsinghua.edu.cn/simple
 ```
 
+AlphaSift 选股属于可选扩展，不影响首页和单股实时分析主链路。默认部署不安装该 GitHub 依赖，避免国内云服务器构建时被外部 GitHub 下载卡住；如需开启 AlphaSift，再单独执行：
+
+```bash
+pip install -r requirements-alphasift.txt
+```
+
 ### 3. 配置环境变量
 
 ```bash

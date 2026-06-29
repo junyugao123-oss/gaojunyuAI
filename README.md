@@ -87,6 +87,12 @@ npm install
 cd ../..
 ```
 
+AlphaSift 选股是可选扩展，不参与首页和单股实时分析主链路。默认部署不安装它，避免云服务器构建时依赖 GitHub；如果确实要开启 AlphaSift 选股，再单独执行：
+
+```bash
+pip install -r requirements-alphasift.txt
+```
+
 ### 2. 配置环境变量
 
 ```bash

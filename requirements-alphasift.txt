@@ -1,0 +1,9 @@
+# ===================================
+# Optional AlphaSift screening engine
+# ===================================
+#
+# This dependency is fetched from GitHub and is not required for the
+# commercial landing page or single-stock analysis API. Keep it out of the
+# default requirements.txt so domestic cloud deployments can rebuild reliably.
+
+git+https://github.com/ZhuLinsen/alphasift.git@377049857cc04175dc3cca62121ee41adec6cdb8#egg=alphasift

@@ -41,7 +41,7 @@ RUN groupadd -g 1000 dsa && \
     useradd -u 1000 -g dsa -m dsa
 
 # 复制依赖文件
-COPY requirements.txt .
+COPY requirements.txt requirements-alphasift.txt .
 
 # 安装 Python 依赖
 RUN pip install --no-cache-dir -r requirements.txt
@@ -56,8 +56,15 @@ COPY strategies/ ./strategies/
 COPY --from=web-builder /app/static ./static/
 COPY docker/entrypoint.sh /usr/local/bin/docker-entrypoint.sh
 
-# Verify the bundled AlphaSift adapter from requirements.
-RUN python -c "import alphasift.dsa_adapter"
+# AlphaSift is an optional screening engine. It is disabled by default and kept
+# out of the base image so production builds are not blocked by GitHub access.
+ARG INSTALL_ALPHASIFT=false
+RUN if [ "$INSTALL_ALPHASIFT" = "true" ]; then \
+      pip install --no-cache-dir -r requirements-alphasift.txt && \
+      python -c "import alphasift.dsa_adapter"; \
+    else \
+      echo "Skipping optional AlphaSift dependency"; \
+    fi
 
 # 确保数据目录存在并授权给 non-root 用户
 RUN mkdir -p /app/data /app/logs /app/reports && \
