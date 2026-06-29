@@ -17,8 +17,11 @@ import {
 import { commercialAnalysisApi } from '../api/commercialAnalysis';
 import { alphasiftApi, type AlphaSiftHotspotsResponse, type AlphaSiftHotspotStock } from '../api/alphasift';
 import { stocksApi, type HotStockItem } from '../api/stocks';
+import useStockIndex from '../hooks/useStockIndex';
 import type { CommercialSearchItem } from '../types/commercialAnalysis';
+import type { StockSuggestion as StockIndexSuggestion } from '../types/stockIndex';
 import { normalizeQuery } from '../utils/normalizeQuery';
+import { searchStocks } from '../utils/searchStocks';
 import './CommercialLandingPage.css';
 
 const LANDING_COPY_VERSION = 'example-preview-20260625';
@@ -58,6 +61,7 @@ type PointPlanItem = {
 };
 
 type SearchSuggestion = Pick<CommercialSearchItem, 'name' | 'code' | 'market' | 'aliases'> & {
+  score?: number;
   hotReason?: string;
   hotScore?: number;
   isHotStock?: boolean;
@@ -249,6 +253,32 @@ function searchMarketPriority(query: string, stock: StockProfile): number {
   return stock.market === 'A股' ? 0 : 1;
 }
 
+function suggestionMarketPriority(query: string, market: string): number {
+  const normalized = normalizeQuery(query);
+  const explicitHk = normalized.startsWith('hk') || normalized.endsWith('hk');
+  const explicitA = normalized.startsWith('sh') || normalized.startsWith('sz') || normalized.startsWith('bj')
+    || normalized.endsWith('sh') || normalized.endsWith('sz') || normalized.endsWith('ss') || normalized.endsWith('bj');
+  if (explicitHk) return market === 'H股' ? 0 : 1;
+  if (explicitA) return market === 'A股' ? 0 : 1;
+  return market === 'A股' ? 0 : 1;
+}
+
+function normalizeSuggestionMarket(market: string): SearchSuggestion['market'] {
+  if (market === 'HK') return 'H股';
+  if (market === 'CN' || market === 'BSE') return 'A股';
+  return market === 'H股' || market === 'A股' ? market : 'A股';
+}
+
+function toSearchSuggestion(suggestion: StockIndexSuggestion): SearchSuggestion {
+  return {
+    name: suggestion.nameZh,
+    code: suggestion.canonicalCode,
+    market: normalizeSuggestionMarket(suggestion.market),
+    aliases: [suggestion.displayCode, suggestion.canonicalCode, suggestion.nameZh],
+    score: suggestion.score,
+  };
+}
+
 function getLocalSuggestions(query: string): SearchSuggestion[] {
   const normalized = normalizeQuery(query);
   if (!normalized) {
@@ -269,6 +299,39 @@ function getLocalSuggestions(query: string): SearchSuggestion[] {
     }));
 
   return matches.slice(0, 5);
+}
+
+function getIndexSuggestions(query: string, stockIndex: Parameters<typeof searchStocks>[1]): SearchSuggestion[] {
+  const normalized = normalizeQuery(query);
+  if (!normalized || isMarketOnlyQuery(normalized) || stockIndex.length === 0) {
+    return [];
+  }
+
+  return searchStocks(query, stockIndex, { limit: SEARCH_RESULT_LIMIT * 3 })
+    .map(toSearchSuggestion)
+    .sort((a, b) => suggestionMarketPriority(normalized, a.market) - suggestionMarketPriority(normalized, b.market)
+      || (b.score ?? 0) - (a.score ?? 0)
+      || a.code.localeCompare(b.code))
+    .slice(0, SEARCH_RESULT_LIMIT);
+}
+
+function mergeSearchSuggestions(query: string, ...lists: SearchSuggestion[][]): SearchSuggestion[] {
+  const normalized = normalizeQuery(query);
+  const seen = new Set<string>();
+  const merged: SearchSuggestion[] = [];
+
+  lists.flat().forEach((suggestion) => {
+    const key = suggestion.code.trim().toUpperCase();
+    if (!key || seen.has(key)) return;
+    seen.add(key);
+    merged.push(suggestion);
+  });
+
+  return merged
+    .sort((a, b) => suggestionMarketPriority(normalized, a.market) - suggestionMarketPriority(normalized, b.market)
+      || (b.score ?? 0) - (a.score ?? 0)
+      || a.code.localeCompare(b.code))
+    .slice(0, SEARCH_RESULT_LIMIT);
 }
 
 function formatSearchDisplayCode(code: string): string {
@@ -506,6 +569,7 @@ function formatPointPrice(value: string): string {
 const CommercialLandingPage: React.FC = () => {
   const navigate = useNavigate();
   const landingRef = useRef<HTMLElement | null>(null);
+  const { index: stockIndex } = useStockIndex();
   const previewStock = DEFAULT_STOCK;
   const [recommendedSearchStock, setRecommendedSearchStock] = useState<SearchSuggestion | null>(null);
   const [query, setQuery] = useState('');
@@ -528,7 +592,11 @@ const CommercialLandingPage: React.FC = () => {
       return;
     }
 
-    const localSuggestions = getLocalSuggestions(query);
+    const localSuggestions = mergeSearchSuggestions(
+      query,
+      getLocalSuggestions(query),
+      getIndexSuggestions(query, stockIndex),
+    );
     setSuggestions(localSuggestions);
 
     let cancelled = false;
@@ -536,7 +604,8 @@ const CommercialLandingPage: React.FC = () => {
       commercialAnalysisApi.search(query, SEARCH_RESULT_LIMIT)
         .then((response) => {
           if (cancelled) return;
-          setSuggestions(response.results.length > 0 ? response.results : localSuggestions);
+          const remoteSuggestions = response.results.length > 0 ? response.results : [];
+          setSuggestions(mergeSearchSuggestions(query, remoteSuggestions, localSuggestions));
         })
         .catch(() => {
           if (cancelled) return;
@@ -548,7 +617,7 @@ const CommercialLandingPage: React.FC = () => {
       cancelled = true;
       window.clearTimeout(timeoutId);
     };
-  }, [query]);
+  }, [query, stockIndex]);
 
   useEffect(() => {
     let cancelled = false;

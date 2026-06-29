@@ -5334,6 +5334,114 @@ def _pending_industry_trend(theme: str = "待读取") -> CommercialIndustryTrend
     )
 
 
+def _fallback_industry_trend(pack: Dict[str, Any], theme: Optional[str] = None) -> CommercialIndustryTrend:
+    """Build a deterministic industry trend when the AI service is unavailable."""
+
+    sectors = [
+        item
+        for item in (pack.get("related_sectors") or [])
+        if item.get("name") and item.get("name") != "待读取"
+    ]
+    news = [
+        item
+        for item in (pack.get("news") or [])
+        if item.get("title") and item.get("title") != "待读取"
+    ]
+    quant_metrics = pack.get("quant_metrics") or []
+    news_counts = _news_signal_counts(news)
+    primary_sector = sectors[0] if sectors else {}
+    primary_theme = str(theme or _primary_industry_theme(pack) or "").strip()
+    if not primary_theme or primary_theme == "待读取":
+        primary_theme = str(primary_sector.get("name") or "核心赛道")
+    board_change = _parse_change_percent_text(
+        primary_sector.get("realtime_change") or primary_sector.get("heat")
+    )
+    sector_change_text = str(primary_sector.get("realtime_change") or primary_sector.get("heat") or "暂无明确涨跌")
+    momentum_20 = (_metric_by_label(quant_metrics, "20日动量") or {}).get("value")
+    momentum_60 = (_metric_by_label(quant_metrics, "60日动量") or {}).get("value")
+    volume_state = (_metric_by_label(quant_metrics, "量价确认") or {}).get("percentile")
+    ma_state = (_metric_by_label(quant_metrics, "均线结构") or {}).get("value")
+    tone_balance = news_counts["positive"] - news_counts["risk"]
+
+    positive_score = 44
+    if board_change is not None:
+        positive_score += 16 if board_change > 0 else -8
+    if news_counts["positive"]:
+        positive_score += min(18, news_counts["positive"] * 3)
+    if tone_balance > 0:
+        positive_score += min(10, tone_balance * 2)
+    positive_score = int(_clamp(positive_score, 22, 78))
+
+    neutral_score = 0
+    if ma_state in {"多头", "修复"}:
+        neutral_title = "趋势结构提供验证线索"
+        neutral_desc = f"20日动量{momentum_20 or '暂无'}、60日动量{momentum_60 or '暂无'}，均线结构{ma_state}，用来观察行业弹性是否延续。"
+    elif ma_state and ma_state != "待读取":
+        neutral_title = "短线趋势仍需量价配合"
+        neutral_desc = f"20日动量{momentum_20 or '暂无'}、60日动量{momentum_60 or '暂无'}，均线结构{ma_state}，先看资金承接。"
+    else:
+        neutral_title = "趋势数据以实时量价为准"
+        neutral_desc = "当前趋势结构数据覆盖有限，先结合板块涨跌、资讯情绪和成交量验证行业热度。"
+
+    risk_score = -42
+    if board_change is not None and board_change < 0:
+        risk_score -= min(18, abs(board_change) * 4)
+    if news_counts["risk"]:
+        risk_score -= min(18, news_counts["risk"] * 4)
+    if volume_state in {"缩量", "转弱"} or ma_state in {"承压", "转弱"}:
+        risk_score -= 10
+    risk_score = int(_clamp(risk_score, -78, -22))
+
+    positive_title = f"{primary_theme}仍有产业关注度"
+    if board_change is not None and board_change > 0:
+        positive_desc = f"关联板块{sector_change_text}，叠加资讯池利好{news_counts['positive']}条，说明资金和信息面仍在关注该方向。"
+    else:
+        positive_desc = f"资讯池利好{news_counts['positive']}条，关联方向为{primary_theme}；后续重点看订单、业绩和板块联动能否同步。"
+
+    risk_title = "板块波动和兑现节奏要跟踪"
+    if board_change is not None and board_change < 0:
+        risk_desc = f"关联板块{sector_change_text}，若个股只靠题材热度而缺少业绩兑现，行业趋势分会被下调。"
+    elif news_counts["risk"]:
+        risk_desc = f"资讯池有利空{news_counts['risk']}条，需跟踪公告、经营数据和资金承接，避免把短线情绪当成长逻辑。"
+    else:
+        risk_desc = f"行业空间不等于公司确定性，仍要看商业化落地、毛利率和现金流能否持续改善。"
+
+    summary_direction = "偏积极" if positive_score >= 58 and tone_balance >= 0 else "偏中性"
+    if risk_score <= -62 and (board_change or 0) < 0:
+        summary_direction = "波动偏高"
+    summary = f"{primary_theme}趋势{summary_direction}，仍需业绩和量价验证"
+
+    return CommercialIndustryTrend(
+        theme=primary_theme[:18],
+        source="fallback",
+        status="ok",
+        summary=summary[:42],
+        items=[
+            CommercialIndustryTrendItem(
+                tone="positive",
+                label="利好",
+                impact_score=positive_score,
+                title=positive_title[:28],
+                description=positive_desc[:88],
+            ),
+            CommercialIndustryTrendItem(
+                tone="neutral",
+                label="中性",
+                impact_score=neutral_score,
+                title=neutral_title[:28],
+                description=neutral_desc[:88],
+            ),
+            CommercialIndustryTrendItem(
+                tone="risk",
+                label="风险",
+                impact_score=risk_score,
+                title=risk_title[:28],
+                description=risk_desc[:88],
+            ),
+        ],
+    )
+
+
 def _primary_industry_theme(pack: Dict[str, Any]) -> str:
     sectors = pack.get("related_sectors") or []
     for item in sectors:
@@ -5382,7 +5490,7 @@ def _try_deepseek_industry_trend(pack: Dict[str, Any]) -> CommercialIndustryTren
 
     api_key = _get_deepseek_key()
     if not api_key:
-        return _pending_industry_trend(theme)
+        return _fallback_industry_trend(pack, theme)
 
     model = (
         os.getenv("COMMERCIAL_ANALYSIS_DEEPSEEK_MODEL")
@@ -5424,7 +5532,7 @@ def _try_deepseek_industry_trend(pack: Dict[str, Any]) -> CommercialIndustryTren
         parsed = json.loads(data["choices"][0]["message"]["content"])
         raw_items = parsed.get("items") or []
         if not isinstance(raw_items, list):
-            return _pending_industry_trend(theme)
+            return _fallback_industry_trend(pack, theme)
         items: List[CommercialIndustryTrendItem] = []
         expected = [("positive", "利好"), ("neutral", "中性"), ("risk", "风险")]
         for index, (tone, label) in enumerate(expected):
@@ -5451,7 +5559,7 @@ def _try_deepseek_industry_trend(pack: Dict[str, Any]) -> CommercialIndustryTren
         )
     except Exception as exc:  # noqa: BLE001 - trend block should degrade to pending.
         logger.warning("[commercial-analysis] DeepSeek industry trend pending: %s", exc)
-        return _pending_industry_trend(theme)
+        return _fallback_industry_trend(pack, theme)
 
 
 def _first_api_key(value: str) -> str:
