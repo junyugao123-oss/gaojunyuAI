@@ -354,7 +354,7 @@ body:has(.gyai-analysis-page) {
 
 .gyaia-verdict-row {
   display: grid;
-  grid-template-columns: minmax(0, 1fr) minmax(400px, 0.88fr);
+  grid-template-columns: minmax(0, 1fr) minmax(520px, 0.95fr);
   gap: 28px;
   align-items: stretch;
   padding: 4px 0 15px;
@@ -405,7 +405,7 @@ body:has(.gyai-analysis-page) {
 
 .gyaia-metric-strip {
   display: grid;
-  grid-template-columns: repeat(3, minmax(0, 1fr));
+  grid-template-columns: repeat(4, minmax(0, 1fr));
   gap: 12px;
   align-items: stretch;
 }
@@ -433,7 +433,7 @@ body:has(.gyai-analysis-page) {
   display: block;
   margin-top: 6px;
   color: #c33829;
-  font-size: 22px;
+  font-size: 21px;
   font-weight: 760;
   line-height: 1;
   white-space: nowrap;
@@ -1731,10 +1731,11 @@ body:has(.gyai-analysis-page) {
   }
 
   .gyaia-brand {
-    flex-direction: column;
-    align-items: flex-start;
-    gap: 8px;
+    flex-direction: row;
+    align-items: center;
+    gap: 9px;
     min-width: 0;
+    max-width: 100%;
   }
 
   .gyaia-nav {
@@ -1750,18 +1751,21 @@ body:has(.gyai-analysis-page) {
     display: inline-flex;
     align-items: center;
     justify-content: center;
-    min-height: 30px;
-    max-width: min(100%, 244px);
-    padding: 4px 12px;
+    flex: 1 1 auto;
+    min-width: 0;
+    min-height: 28px;
+    max-width: 190px;
+    padding: 0 9px;
     border: 1px solid rgba(213, 151, 78, 0.44);
     border-radius: 999px;
     background: linear-gradient(180deg, rgba(187, 118, 47, 0.22), rgba(96, 56, 25, 0.18));
     box-shadow: 0 8px 22px rgba(184, 98, 40, 0.14);
     color: #f3d8ad;
-    font-size: 11.5px;
+    font-size: 10.5px;
     font-weight: 760;
-    line-height: 1.25;
-    text-align: center;
+    line-height: 1;
+    overflow: hidden;
+    text-overflow: ellipsis;
     white-space: nowrap;
   }
 
@@ -1856,8 +1860,8 @@ body:has(.gyai-analysis-page) {
   }
 
   .gyaia-metric-strip div:first-child {
-    grid-column: 1 / -1;
-    min-height: 88px;
+    grid-column: auto;
+    min-height: 96px;
   }
 
   .gyaia-metric-strip strong {
@@ -1866,7 +1870,7 @@ body:has(.gyai-analysis-page) {
   }
 
   .gyaia-metric-strip div:first-child strong {
-    font-size: 27px;
+    font-size: 21px;
   }
 
   .gyaia-metric-strip em {
@@ -2018,10 +2022,10 @@ body:has(.gyai-analysis-page) {
   }
 
   .gyaia-brand-subtitle {
-    max-width: min(100%, 226px);
-    min-height: 29px;
-    padding: 3px 11px;
-    font-size: 11px;
+    max-width: calc(100vw - 184px);
+    min-height: 27px;
+    padding: 0 8px;
+    font-size: 10.5px;
   }
 
   .gyaia-title-row {
@@ -2066,7 +2070,7 @@ body:has(.gyai-analysis-page) {
   }
 
   .gyaia-metric-strip div:first-child strong {
-    font-size: 26px;
+    font-size: 20px;
   }
 
   .gyaia-range-copy strong {

@@ -39,6 +39,7 @@ class CommercialValuationRange(BaseModel):
     low: float = Field(..., description="合理估值下沿")
     high: float = Field(..., description="合理估值上沿")
     current_price: float = Field(..., description="当前价")
+    market_cap: Optional[float] = Field(None, description="按最新价估算的总市值，单位为对应币种元")
     marker_percent: float = Field(..., description="页面估值条marker位置百分比")
     price_position: str = Field(..., description="当前价格所处位置")
     source: Optional[str] = Field(None, description="computed/realtime/pending")

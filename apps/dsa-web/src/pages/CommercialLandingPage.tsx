@@ -43,6 +43,7 @@ type StockProfile = {
   rangeMid: number;
   rangeEnd: number;
   rangeLabel: string;
+  valuationNote: string;
   pricePosition: string;
   pointPlan: PointPlanItem[];
   evidence: EvidenceItem[];
@@ -83,6 +84,7 @@ const STOCKS: StockProfile[] = [
     rangeMid: 98.9,
     rangeEnd: 103.851,
     rangeLabel: 'AI动态估值区间',
+    valuationNote: '安全边际开始收窄',
     pricePosition: '处于合理区间上沿',
     pointPlan: [
       { label: '关注区', price: '80.752', description: '74.410-87.094附近观察承接，不追高。', tone: 'focus' },
@@ -110,6 +112,7 @@ const STOCKS: StockProfile[] = [
     rangeMid: 337.2,
     rangeEnd: 460,
     rangeLabel: 'AI合理估值区间',
+    valuationNote: '区间保护仍在',
     pricePosition: '处于区间中部',
     pointPlan: [
       { label: '关注区', price: '320-340', description: '回落不破区间可观察承接。', tone: 'focus' },
@@ -137,6 +140,7 @@ const STOCKS: StockProfile[] = [
     rangeMid: 1728,
     rangeEnd: 1850,
     rangeLabel: 'AI合理估值区间',
+    valuationNote: '赔率偏向稳健',
     pricePosition: '接近区间上沿',
     pointPlan: [
       { label: '关注区', price: '1620-1680', description: '回落后再看安全边际。', tone: 'focus' },
@@ -164,6 +168,7 @@ const STOCKS: StockProfile[] = [
     rangeMid: 246.8,
     rangeEnd: 320,
     rangeLabel: 'AI合理估值区间',
+    valuationNote: '估值仍需业绩验证',
     pricePosition: '处于区间中部',
     pointPlan: [
       { label: '关注区', price: '232-248', description: '观察盈利修复和资金承接。', tone: 'focus' },
@@ -180,8 +185,19 @@ const STOCKS: StockProfile[] = [
 
 const DEFAULT_STOCK = STOCKS[0];
 const EMPTY_SEARCH_LABEL = '输入股票名称或代码';
+const FALLBACK_HOT_SEARCH_POOL: SearchSuggestion[] = [
+  { name: 'TCL中环', code: '002129.SZ', market: 'A股', aliases: ['TCL中环', '002129', '002129.SZ'], hotReason: '市场关注度候选', hotScore: 82, isHotStock: true },
+  { name: '彤程新材', code: '603650.SH', market: 'A股', aliases: ['彤程新材', '603650', '603650.SH'], hotReason: '材料赛道关注度候选', hotScore: 80, isHotStock: true },
+  { name: '天岳先进', code: '688234.SH', market: 'A股', aliases: ['天岳先进', '688234', '688234.SH'], hotReason: '半导体材料关注度候选', hotScore: 78, isHotStock: true },
+  { name: '五一视界', code: 'HK6651', market: 'H股', aliases: ['五一视界', 'HK6651', '6651.HK'], hotReason: '物理AI关注度候选', hotScore: 76, isHotStock: true },
+];
 const MARKET_ONLY_QUERIES = new Set(['a', 'a股', 'h', 'h股', 'hk', 'sh', 'sz', 'cn', '沪', '深', '港股']);
 const STOCK_CODE_TARGET_RE = /^(?:HK\d{1,5}|\d{1,5}\.HK|\d{1,5}|\d{6}|(?:SH|SZ|BJ)\d{6}|\d{6}\.(?:SH|SZ|SS|BJ))$/i;
+
+function pickLocalHotSearchFallback(): SearchSuggestion {
+  const dayIndex = Math.floor(Date.now() / 86_400_000) % FALLBACK_HOT_SEARCH_POOL.length;
+  return FALLBACK_HOT_SEARCH_POOL[dayIndex];
+}
 
 function containsChineseText(value: string): boolean {
   return /[\u4e00-\u9fff]/.test(value);
@@ -571,7 +587,7 @@ const CommercialLandingPage: React.FC = () => {
   const landingRef = useRef<HTMLElement | null>(null);
   const { index: stockIndex } = useStockIndex();
   const previewStock = DEFAULT_STOCK;
-  const [recommendedSearchStock, setRecommendedSearchStock] = useState<SearchSuggestion | null>(null);
+  const [recommendedSearchStock, setRecommendedSearchStock] = useState<SearchSuggestion | null>(() => pickLocalHotSearchFallback());
   const [query, setQuery] = useState('');
   const [isSearchFocused, setIsSearchFocused] = useState(false);
   const [suggestions, setSuggestions] = useState<SearchSuggestion[]>([]);
@@ -641,6 +657,18 @@ const CommercialLandingPage: React.FC = () => {
         // Keep the local high-quality fallback when realtime hot ranking is unavailable.
       });
 
+    const rankingRefreshTimer = window.setTimeout(() => {
+      stocksApi.getHotRanking(18, 2500)
+        .then((response) => {
+          if (cancelled) return;
+          latestHotRanking = response.stocks || latestHotRanking;
+          applyRecommendation();
+        })
+        .catch(() => {
+          // The first recommendation is already visible; delayed refresh is best-effort.
+        });
+    }, 10_000);
+
     alphasiftApi.getHotspots({ top: 24, refresh: false, includeDetails: true })
       .then((response) => applyRecommendation(response))
       .catch(() => {
@@ -655,6 +683,7 @@ const CommercialLandingPage: React.FC = () => {
 
     return () => {
       cancelled = true;
+      window.clearTimeout(rankingRefreshTimer);
     };
   }, []);
 
@@ -934,7 +963,7 @@ const CommercialLandingPage: React.FC = () => {
                     {formatRangePrice(previewStock.rangeEnd)}
                   </strong>
                 </div>
-                <em>{previewStock.pricePosition}</em>
+                <em>{previewStock.valuationNote}</em>
               </div>
               <div className="gyai-digest-bottom" aria-label="示例当前价格与确认位">
                 <div className="gyai-digest-point">

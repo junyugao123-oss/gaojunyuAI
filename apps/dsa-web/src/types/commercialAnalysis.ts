@@ -23,6 +23,7 @@ export type CommercialValuationRange = {
   low: number;
   high: number;
   currentPrice: number;
+  marketCap?: number | null;
   markerPercent: number;
   pricePosition: string;
   source?: string | null;

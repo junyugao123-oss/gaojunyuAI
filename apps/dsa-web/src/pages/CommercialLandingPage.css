@@ -1392,13 +1392,15 @@ body:has(.gyai-landing) {
   }
 
   .gyai-brand {
-    flex-direction: column;
-    align-items: flex-start;
-    gap: 6px;
+    flex-direction: row;
+    align-items: center;
+    gap: 9px;
     min-width: 0;
+    max-width: 100%;
   }
 
   .gyai-brand-name {
+    flex: 0 0 auto;
     font-size: 22px;
   }
 
@@ -1406,9 +1408,11 @@ body:has(.gyai-landing) {
     display: inline-flex;
     align-items: center;
     justify-content: center;
-    min-height: 34px;
-    max-width: 170px;
-    padding: 4px 9px;
+    flex: 1 1 auto;
+    min-width: 0;
+    min-height: 28px;
+    max-width: 190px;
+    padding: 0 9px;
     border: 1px solid rgba(213, 151, 78, 0.44);
     border-radius: 999px;
     background: linear-gradient(180deg, rgba(187, 118, 47, 0.22), rgba(96, 56, 25, 0.18));
@@ -1416,9 +1420,10 @@ body:has(.gyai-landing) {
     color: #f3d8ad;
     font-size: 10.5px;
     font-weight: 760;
-    line-height: 1.25;
-    text-align: center;
-    white-space: normal;
+    line-height: 1;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
   }
 
   .gyai-nav-right {
@@ -1662,10 +1667,10 @@ body:has(.gyai-landing) {
   }
 
   .gyai-brand-subtitle {
-    max-width: 164px;
-    min-height: 32px;
-    padding: 3px 8px;
-    font-size: 10px;
+    max-width: calc(100vw - 178px);
+    min-height: 27px;
+    padding: 0 8px;
+    font-size: 10.5px;
   }
 
   .gyai-hero-stage {

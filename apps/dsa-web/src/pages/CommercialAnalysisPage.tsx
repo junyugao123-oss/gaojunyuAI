@@ -69,6 +69,45 @@ function formatRangeValue(value: number): string {
   });
 }
 
+function formatMarketCap(value?: number | null): string {
+  if (typeof value !== 'number' || !Number.isFinite(value) || value <= 0) {
+    return '—';
+  }
+
+  if (value >= 1_000_000_000_000) {
+    return `${(value / 1_000_000_000_000).toLocaleString('zh-CN', {
+      minimumFractionDigits: 2,
+      maximumFractionDigits: 2,
+    })}万亿`;
+  }
+
+  if (value >= 100_000_000) {
+    return `${(value / 100_000_000).toLocaleString('zh-CN', {
+      minimumFractionDigits: 1,
+      maximumFractionDigits: 1,
+    })}亿`;
+  }
+
+  if (value >= 10_000) {
+    return `${(value / 10_000).toLocaleString('zh-CN', {
+      minimumFractionDigits: 1,
+      maximumFractionDigits: 1,
+    })}万`;
+  }
+
+  return value.toLocaleString('zh-CN', {
+    maximumFractionDigits: 0,
+  });
+}
+
+function marketCapDescription(currencyLabel: string, marketCap?: number | null): string {
+  if (typeof marketCap !== 'number' || !Number.isFinite(marketCap) || marketCap <= 0) {
+    return '随实时行情更新';
+  }
+
+  return currencyLabel.includes('港') ? '港元口径估算' : '人民币口径估算';
+}
+
 function newsToneLabel(tone: string): string {
   if (tone === 'pending') return '待读取';
   if (tone === 'positive') return '利好';
@@ -168,12 +207,16 @@ function buildDecisionEngineSteps(
   const qualityScore = getScore(analysis, '盈利能力') ?? 5;
   const financeScore = getScore(analysis, '财务') ?? 5;
   const recommendationText = `${analysis.recommendation.action} ${analysis.recommendation.summary}`;
+  const isActiveBuy = /积极买入/.test(recommendationText);
   const isCautious = /谨慎|观察|风险|承压|不追高/.test(recommendationText);
 
   let currentAction = '观察为主';
   let currentDescription = '先看价格是否继续稳定在合理区间附近，避免在趋势没有确认前主动追高。';
 
-  if (currentPrice < low) {
+  if (isActiveBuy) {
+    currentAction = '积极买入';
+    currentDescription = `当前价${currentPriceText}处在估值区间${lowText}-${highText}的安全边际内，成长、估值和量价信号同时过线，可分批建立首仓。`;
+  } else if (currentPrice < low) {
     currentAction = growthScore >= 6 ? '低吸跟踪' : '等待修复';
     currentDescription = growthScore >= 6
       ? `当前价${currentPriceText}低于估值区间${lowText}-${highText}，若基本面没有恶化，可作为第一关注池，分批观察承接。`
@@ -196,8 +239,8 @@ function buildDecisionEngineSteps(
       : `当前价${currentPriceText}高于区间上沿${highText}，安全边际不足，优先等待回撤或新的业绩证据。`;
   }
 
-  const entryValue = currentPrice <= high && growthScore >= 6 ? '分批低吸' : '只等机会';
-  const addValue = confirmPoint && markerPercent < 82 && growthScore >= 6 ? '确认后加' : '暂不加仓';
+  const entryValue = isActiveBuy ? '分批买入' : currentPrice <= high && growthScore >= 6 ? '分批低吸' : '只等机会';
+  const addValue = isActiveBuy || (confirmPoint && markerPercent < 82 && growthScore >= 6) ? '确认后加' : '暂不加仓';
   const riskValue = invalidPoint || financeScore < 4 ? '跌破撤退' : '设线防守';
 
   return [
@@ -210,10 +253,12 @@ function buildDecisionEngineSteps(
     {
       label: '入场纪律',
       value: entryValue,
-      description: entryValue === '分批低吸'
-        ? `只在价格回落到${lowText}-${highText}区间内且有承接时分批参与，不一次打满仓位。`
-        : `当前不急于开新仓，先等价格回到${lowText}-${highText}区间，或等趋势与消息面共振。`,
-      tone: entryValue === '分批低吸' ? 'positive' : 'watch',
+      description: entryValue === '分批买入'
+        ? `首仓仍按分批执行，不一次打满；若价格重新跌回${lowText}附近但基本面未恶化，可继续低吸验证。`
+        : entryValue === '分批低吸'
+          ? `只在价格回落到${lowText}-${highText}区间内且有承接时分批参与，不一次打满仓位。`
+          : `当前不急于开新仓，先等价格回到${lowText}-${highText}区间，或等趋势与消息面共振。`,
+      tone: entryValue === '分批买入' || entryValue === '分批低吸' ? 'positive' : 'watch',
     },
     {
       label: '加仓节奏',
@@ -488,6 +533,11 @@ const CommercialAnalysisPage: React.FC = () => {
               <span>当前价</span>
               <strong>{formatPrice(analysis.valuation.currentPrice)}</strong>
               <em>{analysis.valuation.pricePosition}</em>
+            </div>
+            <div>
+              <span>当前市值</span>
+              <strong>{formatMarketCap(analysis.valuation.marketCap)}</strong>
+              <em>{marketCapDescription(analysis.valuation.currencyLabel, analysis.valuation.marketCap)}</em>
             </div>
             {actionPoints.map((point) => (
               <div key={point.label}>

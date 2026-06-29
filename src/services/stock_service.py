@@ -10,6 +10,8 @@
 """
 
 import logging
+import os
+from concurrent.futures import ThreadPoolExecutor, TimeoutError as FuturesTimeoutError
 from datetime import datetime, timedelta
 from typing import Optional, Dict, Any, List
 
@@ -19,6 +21,26 @@ logger = logging.getLogger(__name__)
 
 _HOT_STOCKS_CACHE: Dict[int, tuple[datetime, Dict[str, Any]]] = {}
 _HOT_STOCKS_CACHE_SECONDS = 45
+_HOT_STOCKS_FETCH_EXECUTOR = ThreadPoolExecutor(max_workers=2, thread_name_prefix="hot-stocks")
+_HOT_STOCKS_FAST_FALLBACK: List[Dict[str, Any]] = [
+    {"rank": 1, "code": "002129.SZ", "name": "TCL中环", "change_pct": 0.0, "reason": "半导体材料与新能源链关注度较高"},
+    {"rank": 2, "code": "603650.SH", "name": "彤程新材", "change_pct": 0.0, "reason": "光刻胶与电子材料方向关注度较高"},
+    {"rank": 3, "code": "688234.SH", "name": "天岳先进", "change_pct": 0.0, "reason": "碳化硅半导体材料关注度较高"},
+    {"rank": 4, "code": "300750.SZ", "name": "宁德时代", "change_pct": 0.0, "reason": "新能源龙头关注度稳定"},
+    {"rank": 5, "code": "002594.SZ", "name": "比亚迪", "change_pct": 0.0, "reason": "智能电动车与电池链关注度稳定"},
+    {"rank": 6, "code": "600519.SH", "name": "贵州茅台", "change_pct": 0.0, "reason": "消费龙头关注度稳定"},
+    {"rank": 7, "code": "HK6651", "name": "五一视界", "change_pct": 0.0, "reason": "物理AI与数字孪生方向关注度较高"},
+    {"rank": 8, "code": "688981.SH", "name": "中芯国际", "change_pct": 0.0, "reason": "国产半导体制造关注度较高"},
+    {"rank": 9, "code": "0700.HK", "name": "腾讯控股", "change_pct": 0.0, "reason": "港股互联网龙头关注度稳定"},
+    {"rank": 10, "code": "9988.HK", "name": "阿里巴巴-W", "change_pct": 0.0, "reason": "港股互联网平台关注度稳定"},
+]
+
+
+def _hot_stocks_timeout_seconds() -> float:
+    try:
+        return max(0.8, min(float(os.getenv("HOT_STOCKS_TIMEOUT_SECONDS", "3.5")), 8.0))
+    except (TypeError, ValueError):
+        return 3.5
 
 
 class StockService:
@@ -108,20 +130,76 @@ class StockService:
                 "stocks": [dict(item) for item in payload.get("stocks", [])],
             }
 
-        try:
-            from data_provider.base import DataFetcherManager, normalize_stock_code
+        rows = self._fetch_hot_rows_with_timeout(cache_limit)
+        stocks = self._build_hot_stock_items(rows, cache_limit)
+        if not stocks:
+            logger.warning("[人气股] 实时热榜暂不可用，使用快速热门候选兜底")
+            stocks = self._build_hot_stock_items(self._fallback_hot_rows(cache_limit), cache_limit)
 
-            manager = DataFetcherManager()
-            rows = manager.get_hot_stocks(cache_limit)
+        stocks.sort(key=lambda item: (-(item.get("hot_score") or 0), item.get("rank") or 999))
+        result = {
+            "stocks": stocks[:cache_limit],
+            "generated_at": now.isoformat(),
+        }
+        if result["stocks"]:
+            _HOT_STOCKS_CACHE[cache_limit] = (now, {
+                **result,
+                "stocks": [dict(item) for item in result["stocks"]],
+            })
+        return result
+
+    def _fetch_hot_rows_with_timeout(self, limit: int) -> List[Dict[str, Any]]:
+        timeout_seconds = _hot_stocks_timeout_seconds()
+        future = _HOT_STOCKS_FETCH_EXECUTOR.submit(self._fetch_remote_hot_rows, limit)
+        future.add_done_callback(lambda done: self._cache_completed_hot_rows(done, limit))
+        try:
+            return future.result(timeout=timeout_seconds) or []
+        except FuturesTimeoutError:
+            logger.warning("[人气股] 热榜数据源 %.1fs 内未返回，先使用快速候选", timeout_seconds)
+            return []
         except Exception as e:
             logger.warning(f"获取市场热门股失败: {e}", exc_info=True)
-            if cached:
-                payload = cached[1]
-                return {
-                    **payload,
-                    "stocks": [dict(item) for item in payload.get("stocks", [])],
-                }
-            rows = []
+            return []
+
+    @staticmethod
+    def _fetch_remote_hot_rows(limit: int) -> List[Dict[str, Any]]:
+        from data_provider.base import DataFetcherManager
+
+        manager = DataFetcherManager()
+        return manager.get_hot_stocks(limit) or []
+
+    def _cache_completed_hot_rows(self, future: Any, limit: int) -> None:
+        try:
+            rows = future.result()
+        except Exception:
+            return
+        stocks = self._build_hot_stock_items(rows, limit)
+        if not stocks:
+            return
+        now = datetime.now()
+        _HOT_STOCKS_CACHE[limit] = (now, {
+            "stocks": [dict(item) for item in stocks[:limit]],
+            "generated_at": now.isoformat(),
+        })
+
+    def _fallback_hot_rows(self, limit: int) -> List[Dict[str, Any]]:
+        if not _HOT_STOCKS_FAST_FALLBACK:
+            return []
+        day_offset = datetime.now().timetuple().tm_yday % len(_HOT_STOCKS_FAST_FALLBACK)
+        rotated = _HOT_STOCKS_FAST_FALLBACK[day_offset:] + _HOT_STOCKS_FAST_FALLBACK[:day_offset]
+        return [
+            {
+                **row,
+                "rank": index + 1,
+            }
+            for index, row in enumerate(rotated[:limit])
+        ]
+
+    def _build_hot_stock_items(self, rows: List[Dict[str, Any]], limit: int) -> List[Dict[str, Any]]:
+        try:
+            from data_provider.base import normalize_stock_code
+        except Exception:
+            normalize_stock_code = None
 
         stocks: List[Dict[str, Any]] = []
         seen: set[str] = set()
@@ -130,9 +208,12 @@ class StockService:
             name = str(row.get("name") or row.get("stock_name") or "").strip()
             if not raw_code or not name:
                 continue
-            try:
-                code = normalize_stock_code(raw_code)
-            except Exception:
+            if normalize_stock_code:
+                try:
+                    code = normalize_stock_code(raw_code)
+                except Exception:
+                    code = raw_code
+            else:
                 code = raw_code
             code_key = code.upper()
             if code_key in seen:
@@ -151,9 +232,9 @@ class StockService:
             rank_score = max(0.0, 100.0 - (rank_value - 1) * 4.5)
             hot_score = max(0.0, min(100.0, rank_score + change_score + amount_score))
 
-            reason_parts = ["热度排名靠前"]
+            reason_parts = [str(row.get("reason") or "热度排名靠前")]
             if change_pct is not None:
-                reason_parts.append("涨幅活跃" if change_pct >= 0 else "回调仍有关注")
+                reason_parts.append("涨幅活跃" if change_pct > 0 else "关注度活跃")
             if amount:
                 reason_parts.append("成交活跃")
 
@@ -166,18 +247,10 @@ class StockService:
                 "hot_score": round(hot_score, 1),
                 "reason": " · ".join(reason_parts[:3]),
             })
+            if len(stocks) >= limit:
+                break
 
-        stocks.sort(key=lambda item: (-(item.get("hot_score") or 0), item.get("rank") or 999))
-        result = {
-            "stocks": stocks[:cache_limit],
-            "generated_at": now.isoformat(),
-        }
-        if result["stocks"]:
-            _HOT_STOCKS_CACHE[cache_limit] = (now, {
-                **result,
-                "stocks": [dict(item) for item in result["stocks"]],
-            })
-        return result
+        return stocks
     
     def get_history_data(
         self,

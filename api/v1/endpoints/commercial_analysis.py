@@ -622,6 +622,8 @@ def _parse_tencent_quote(fields: Any, history: List[Dict[str, Any]]) -> Dict[str
         previous_close = history[-2].get("close")
     change = _safe_float(quote_fields[31] if len(quote_fields) > 31 else None)
     change_percent = _safe_float(quote_fields[32] if len(quote_fields) > 32 else None)
+    market_cap_yi = _safe_float(quote_fields[44] if len(quote_fields) > 44 else None)
+    float_market_cap_yi = _safe_float(quote_fields[45] if len(quote_fields) > 45 else None)
     if change is None and price is not None and previous_close:
         change = float(price) - float(previous_close)
     if change_percent is None and change is not None and previous_close:
@@ -637,6 +639,8 @@ def _parse_tencent_quote(fields: Any, history: List[Dict[str, Any]]) -> Dict[str
         "low": _safe_float(quote_fields[34] if len(quote_fields) > 34 else None) or latest.get("low"),
         "volume": _safe_float(quote_fields[36] if len(quote_fields) > 36 else None) or latest.get("volume"),
         "amount": _safe_float(quote_fields[37] if len(quote_fields) > 37 else None),
+        "market_cap": market_cap_yi * 100_000_000 if market_cap_yi is not None and market_cap_yi > 0 else None,
+        "float_market_cap": float_market_cap_yi * 100_000_000 if float_market_cap_yi is not None and float_market_cap_yi > 0 else None,
         "update_time": str(quote_fields[30]).strip() if len(quote_fields) > 30 and quote_fields[30] else _now_iso(),
         "currency": str(quote_fields[77]).strip() if len(quote_fields) > 77 and quote_fields[77] else None,
     }
@@ -1508,6 +1512,81 @@ def _profile_theme_hint(profile: Dict[str, Any], sectors: List[Dict[str, str]]) 
     return "、".join(hints[:2])
 
 
+def _profile_primary_terms(profile: Dict[str, Any], sectors: List[Dict[str, str]], stock: Optional[Dict[str, Any]] = None) -> str:
+    """Terms that are safe enough to infer the company's main business.
+
+    Company intros / business scopes often contain incidental words such as
+    hotel, entertainment, information service or transport. Those words are not
+    reliable enough to redefine the company. Use only stock name, verified
+    profile, main business, products, industry and the first few related boards.
+    """
+
+    return _compact_query(
+        " ".join(
+            [
+                str((stock or {}).get("name") or ""),
+                str(profile.get("verified_position") or ""),
+                str(profile.get("industry") or ""),
+                str(profile.get("business") or ""),
+                str(profile.get("business_model") or ""),
+                " ".join(str(item) for item in profile.get("products") or []),
+                " ".join(str(item.get("name") or "") for item in sectors[:4]),
+            ]
+        )
+    )
+
+
+def _has_any_term(text: str, keywords: tuple[str, ...]) -> bool:
+    return any(_compact_query(keyword) in text for keyword in keywords)
+
+
+def _infer_company_business_category(
+    profile: Dict[str, Any],
+    sectors: List[Dict[str, str]],
+    stock: Optional[Dict[str, Any]] = None,
+) -> str:
+    primary = _profile_primary_terms(profile, sectors, stock)
+    if not primary:
+        return ""
+    if _has_any_term(primary, ("影视娱乐", "品牌授权", "实景娱乐", "影视院线", "影视动漫制作")):
+        return "media_content"
+    if _has_any_term(primary, ("tcl中环", "光伏硅片", "光伏组件", "光伏逆变器", "组串逆变器", "集中逆变器")):
+        return "renewable_power"
+    if _has_any_term(primary, ("汇川技术", "工业自动化", "plc", "hmi", "伺服", "变频器", "运动控制", "电梯控制")):
+        return "industrial_automation"
+    rules: List[tuple[str, tuple[str, ...]]] = [
+        ("baijiu", ("白酒", "茅台酒", "系列酒", "酿酒", "酒类", "食品饮料", "高端白酒")),
+        ("broker_exchange", ("中信证券", "证券", "券商", "交易所", "港交所", "金融交易", "证券承销", "经纪业务")),
+        ("insurance", ("保险", "寿险", "财险", "再保险", "保险服务")),
+        ("bank", ("银行", "商业银行", "存款", "贷款", "零售银行", "公司金融")),
+        ("telecom", ("中兴通讯", "中国联通", "通信", "运营商", "电讯", "电信", "光模块", "通信设备", "5g")),
+        ("internet_platform", ("腾讯", "阿里巴巴", "百度", "京东", "美团", "快手", "网易", "东方财富", "互联网", "电商", "专业零售", "本地生活", "广告", "游戏", "社交", "外卖", "搜索", "网络直播", "电子竞技")),
+        ("security_iot", ("海康威视", "安防", "智能物联", "视频技术", "热成像", "计算机设备", "智能家居")),
+        ("semiconductor_material", ("光刻胶", "cmp", "电子专用材料", "高纯溶剂", "半导体材料")),
+        ("semiconductor_chip", ("芯片", "集成电路", "半导体", "晶圆", "先进封装", "gpu", "asic")),
+        ("lithium_material", ("锂矿", "锂精矿", "碳酸锂", "氢氧化锂", "金属锂", "能源金属")),
+        ("industrial_automation", ("工业自动化", "伺服系统", "变频器", "运动控制", "电梯控制", "工业控制")),
+        ("battery_ev", ("锂电", "电池", "动力电池", "储能", "新能源汽车", "新能源车", "整车", "汽车")),
+        ("renewable_power", ("光伏", "逆变器", "风电", "新能源发电", "储能系统", "电力设备")),
+        ("medical_device", ("医疗器械", "医学影像", "体外诊断", "手术机器人", "监护仪")),
+        ("pharma", ("创新药", "医药", "制药", "生物药", "cro", "cxO", "疫苗")),
+        ("physical_ai", ("物理ai", "数字孪生", "仿真", "空间智能", "合成数据")),
+        ("software_ai", ("软件", "办公软件", "人工智能", "ai", "云服务", "数据", "数字化", "信创")),
+        ("consumer_electronics", ("小米", "智能手机", "手机", "iot", "资讯科技器材", "智能硬件")),
+        ("home_appliance", ("家电", "空调", "冰箱", "洗衣机", "消费电器")),
+        ("machinery", ("工程机械", "重工", "挖掘机", "机械设备", "工业设备")),
+        ("consumer_brand", ("运动服饰", "服装", "鞋服", "纺织及服饰", "体育用品", "安踏", "李宁", "消费品牌", "免税", "旅游零售")),
+        ("chemical_material", ("化工", "橡胶", "助剂", "树脂", "新材料", "材料")),
+        # Keep media late and require stronger main-business evidence. A generic
+        # "娱乐" in business scope must not override liquor, consumer or tourism.
+        ("media_content", ("影视", "电影", "电视剧", "传媒", "院线", "品牌授权", "实景娱乐", "文旅演艺")),
+    ]
+    for category, keywords in rules:
+        if _has_any_term(primary, keywords):
+            return category
+    return ""
+
+
 def _company_basic_reason(
     stock: Dict[str, Any],
     profile: Dict[str, Any],
@@ -1548,6 +1627,40 @@ def _company_basic_reason(
     )
     product_text = "、".join(_profile_phrase(item, 18) for item in products[:4] if str(item).strip())
     st_risk_note = "公司带ST标签，基本面验证权重要高于题材弹性。" if "st" in _compact_query(name) else ""
+    category = _infer_company_business_category(profile, sectors, stock)
+
+    if category == "baijiu":
+        product_line = f"，核心产品包括{product_text}" if product_text else "，核心产品以白酒及系列酒为主"
+        return (
+            f"公司定位：{name}属于高端白酒/食品饮料链条公司{product_line}。"
+            "业务主线：核心看品牌定价权、渠道库存、直销占比、吨价和系列酒放量。"
+            "行业逻辑：高端白酒受商务消费、居民收入和渠道周期影响，龙头通常更看长期品牌壁垒和现金流质量。"
+            "观察重点：收入增速、净利率、合同负债、经营现金流、批价和渠道库存。"
+        )
+
+    if category == "bank":
+        return (
+            f"公司定位：{name}属于银行金融机构，业务围绕存贷款、财富管理和综合金融服务展开。"
+            "业务主线：核心看净息差、资产质量、拨备覆盖率、存款成本和分红稳定性。"
+            "行业逻辑：银行股估值受利率周期、地产信用、宏观需求和资本充足率影响。"
+            "观察重点：不良率、净息差、拨备、ROE、资本充足率和股息率。"
+        )
+
+    if category == "insurance":
+        return (
+            f"公司定位：{name}属于保险金融机构，核心业务看寿险、财险、投资收益和新业务价值。"
+            "业务主线：利润来自承保质量、保费增长、投资端收益和费用控制。"
+            "行业逻辑：保险股对利率、权益市场和代理人渠道改革敏感。"
+            "观察重点：新业务价值、综合成本率、投资收益率、偿付能力和保费增速。"
+        )
+
+    if category == "broker_exchange":
+        return (
+            f"公司定位：{name}属于资本市场服务链条，业务与交易活跃度、上市融资和金融产品生态相关。"
+            "业务主线：核心看成交额、IPO与再融资、衍生品业务、托管结算或财富管理收入。"
+            "行业逻辑：资本市场景气度和政策周期决定估值弹性。"
+            "观察重点：日均成交额、市场风险偏好、费用率、监管政策和盈利稳定性。"
+        )
 
     if "物理ai" in terms or "数字孪生" in terms or "仿真" in terms:
         platforms = [keyword for keyword in ("51Aes", "51Sim", "51Earth") if keyword.lower() in terms]
@@ -1561,8 +1674,17 @@ def _company_basic_reason(
             "观察重点：收入增长、客户续费、项目交付和毛利率。"
         )
 
-    if "光刻胶" in terms or "cmp" in terms or "半导体" in terms or "电子专用材料" in terms:
+    if category in {"semiconductor_material", "semiconductor_chip"} or (
+        not category and ("光刻胶" in terms or "cmp" in terms or "半导体" in terms or "电子专用材料" in terms)
+    ):
         product_line = f"，核心产品包括{product_text}" if product_text else ""
+        if category == "semiconductor_chip":
+            return (
+                f"公司定位：{name}属于半导体/芯片产业链公司{product_line}。"
+                "业务主线：看产品迭代、客户导入、产能利用率、国产替代和先进制程/封装进展。"
+                "行业逻辑：半导体景气度波动大，长期空间取决于国产替代和AI算力需求兑现。"
+                "观察重点：订单、毛利率、研发投入、库存周期和资本开支。"
+            )
         return (
             f"公司定位：{name}属于电子材料/半导体材料链条公司{product_line}。"
             "业务主线：看高端材料验证导入、客户扩产和国产替代份额提升。"
@@ -1570,16 +1692,139 @@ def _company_basic_reason(
             "观察重点：订单放量、产品认证、毛利率和现金流。"
         )
 
-    if "橡胶" in terms or "助剂" in terms or "树脂" in terms:
+    if category == "security_iot":
+        product_line = f"，核心产品包括{product_text}" if product_text else "，核心围绕视频感知、智能物联和安防设备"
+        return (
+            f"公司定位：{name}属于智能物联/安防设备链条公司{product_line}。"
+            "业务主线：核心看硬件设备、软件平台、AI视觉能力和行业客户项目的协同变现。"
+            "行业逻辑：安防与物联需求受政府、企业数字化预算和海外合规环境影响，AI能力决定中长期产品升级空间。"
+            "观察重点：收入增速、海外收入、毛利率、现金流、库存和行业项目回款。"
+        )
+
+    if category == "lithium_material":
+        product_line = f"，核心产品包括{product_text}" if product_text else "，核心围绕锂矿资源和锂盐产品"
+        return (
+            f"公司定位：{name}属于锂资源/新能源材料链条公司{product_line}。"
+            "业务主线：核心看锂价、资源自给率、产能释放、下游电池需求和成本控制。"
+            "行业逻辑：锂资源公司弹性强，但盈利高度受商品价格周期、供需出清和库存节奏影响。"
+            "观察重点：锂盐价格、产销量、库存、现金流、资本开支和资产减值风险。"
+        )
+
+    if category in {"battery_ev", "renewable_power"}:
+        product_line = f"，核心产品包括{product_text}" if product_text else ""
+        if category == "battery_ev":
+            return (
+                f"公司定位：{name}属于新能源车/动力电池链条公司{product_line}。"
+                "业务主线：核心看销量、装机量、产品结构、成本下降和海外订单兑现。"
+                "行业逻辑：新能源产业长期空间大，但价格战、产能周期和技术路线变化会影响利润率。"
+                "观察重点：出货量、毛利率、库存、现金流、订单和新技术落地。"
+            )
+        return (
+            f"公司定位：{name}属于光伏/储能/电力设备链条公司{product_line}。"
+            "业务主线：核心看装机需求、订单交付、成本曲线和海外市场拓展。"
+            "行业逻辑：新能源设备受装机周期、价格竞争和政策节奏影响，盈利弹性与产能出清相关。"
+            "观察重点：订单、毛利率、库存、现金流和海外收入占比。"
+        )
+
+    if category == "industrial_automation":
+        product_line = f"，核心产品包括{product_text}" if product_text else "，核心围绕工业自动化控制、伺服和变频器"
+        return (
+            f"公司定位：{name}属于工业自动化/智能制造链条公司{product_line}。"
+            "业务主线：核心看工业控制产品份额、制造业资本开支、新能源车电驱和海外渠道拓展。"
+            "行业逻辑：工业自动化受制造业景气、设备更新和国产替代影响，长期空间来自高端控制系统渗透率提升。"
+            "观察重点：订单、毛利率、应收回款、库存、海外收入和新业务盈利拐点。"
+        )
+
+    if category in {"pharma", "medical_device"}:
+        product_line = f"，核心产品包括{product_text}" if product_text else ""
+        if category == "medical_device":
+            return (
+                f"公司定位：{name}属于医疗器械/高端医疗设备链条公司{product_line}。"
+                "业务主线：核心看医院采购需求、产品装机、试剂耗材复购、海外渠道和研发迭代。"
+                "行业逻辑：医疗器械估值受集采政策、院内设备更新、国产替代和海外拓展影响。"
+                "观察重点：收入增速、毛利率、海外收入、研发投入、现金流和政策变化。"
+            )
+        return (
+            f"公司定位：{name}属于医药/医疗健康链条公司{product_line}。"
+            "业务主线：核心看产品管线、临床或注册进度、院内需求、海外放量和费用控制。"
+            "行业逻辑：医药估值取决于创新兑现、医保控费、出海能力和盈利质量。"
+            "观察重点：收入增速、毛利率、研发管线、现金流和政策影响。"
+        )
+
+    if category == "internet_platform":
+        return (
+            f"公司定位：{name}属于互联网平台型公司，业务通常围绕流量、交易、广告、云服务或内容生态变现。"
+            "业务主线：核心看用户规模、变现效率、费用控制、云与AI投入产出。"
+            "行业逻辑：平台公司估值受监管、竞争格局、消费景气和AI效率提升影响。"
+            "观察重点：收入增速、利润率、回购、云业务、用户活跃度和竞争强度。"
+        )
+
+    if category in {"software_ai", "physical_ai"}:
         product_line = f"，核心产品包括{product_text}" if product_text else ""
         return (
-            f"公司定位：{name}属于化工材料/橡胶助剂链条公司{product_line}。"
-            "业务主线：看轮胎与汽车产业链需求、产品价格和成本传导能力。"
-            "行业趋势：化工材料景气度有周期性，涨价或补库会带来弹性。"
+            f"公司定位：{name}属于软件/AI数字化链条公司{product_line}。"
+            "业务主线：核心看产品订阅、客户续费、企业数字化预算和AI能力商业化。"
+            "行业逻辑：软件和AI长期空间取决于渗透率提升，但短期会受客户预算和交付周期影响。"
+            "观察重点：收入增速、续费率、毛利率、研发投入和现金流。"
+        )
+
+    if category == "home_appliance":
+        return (
+            f"公司定位：{name}属于家电消费制造链条，核心业务看空调、冰洗、小家电或综合电器产品。"
+            "业务主线：核心看内外销需求、产品结构升级、渠道效率和原材料成本。"
+            "行业逻辑：家电龙头现金流较稳，但估值弹性通常来自出海、分红和新业务增长。"
+            "观察重点：收入增速、毛利率、海外收入、库存和分红回购。"
+        )
+
+    if category == "machinery":
+        return (
+            f"公司定位：{name}属于工程机械/工业设备链条，收入与基建、矿山、制造业投资和出口相关。"
+            "业务主线：核心看设备销量、海外市场、更新周期、产品结构和成本控制。"
+            "行业逻辑：工程机械周期属性强，龙头弹性来自出口、更新需求和盈利修复。"
+            "观察重点：订单、开工率、海外收入、毛利率和现金流。"
+        )
+
+    if category == "consumer_brand":
+        return (
+            f"公司定位：{name}属于消费品牌/旅游零售链条，业绩与客流、渠道效率和品牌势能相关。"
+            "业务主线：核心看同店增长、库存、折扣率、会员运营和渠道扩张。"
+            "行业逻辑：消费股弹性取决于居民消费修复、品牌竞争和费用投放效率。"
+            "观察重点：收入增速、毛利率、库存周转、现金流和门店/渠道表现。"
+        )
+
+    if category == "telecom":
+        return (
+            f"公司定位：{name}属于通信与数字基建链条，业务与运营商资本开支、网络升级和企业数字化相关。"
+            "业务主线：核心看设备订单、运营商需求、算力网络、云网融合和费用控制。"
+            "行业逻辑：通信行业受技术周期和资本开支驱动，AI算力与数据中心需求会影响估值弹性。"
+            "观察重点：订单、毛利率、现金流、研发投入和海外风险。"
+        )
+
+    if category == "consumer_electronics":
+        product_line = f"，核心产品包括{product_text}" if product_text else "，核心围绕智能手机、IoT和智能硬件"
+        return (
+            f"公司定位：{name}属于消费电子/智能硬件链条公司{product_line}。"
+            "业务主线：核心看手机出货、IoT生态、渠道效率、互联网服务变现和新业务投入产出。"
+            "行业逻辑：消费电子受换机周期、供应链成本、海外市场和AI终端升级影响。"
+            "观察重点：出货量、毛利率、库存、海外收入、费用率和现金流。"
+        )
+
+    if category == "chemical_material" or (not category and ("橡胶" in terms or "助剂" in terms or "树脂" in terms)):
+        product_line = f"，核心产品包括{product_text}" if product_text else ""
+        if "橡胶" in terms or "助剂" in terms:
+            business_focus = "轮胎与汽车产业链需求、产品价格和成本传导能力"
+            industry_logic = "橡胶助剂和化工材料景气度有周期性，涨价或补库会带来弹性"
+        else:
+            business_focus = "产品价格、下游需求、成本传导和产能利用率"
+            industry_logic = "化工与新材料受供需周期、原材料价格和环保产能约束影响"
+        return (
+            f"公司定位：{name}属于化工/新材料链条公司{product_line}。"
+            f"业务主线：看{business_focus}。"
+            f"行业趋势：{industry_logic}。"
             "观察重点：销量、价差、库存周期和环保产能约束。"
         )
 
-    if any(keyword in terms for keyword in ("影视", "电影", "娱乐", "传媒", "品牌授权", "实景娱乐", "文旅", "院线")):
+    if category == "media_content":
         product_line = f"的核心业务包括{product_text}" if product_text else (f"主营{business}" if business else "主要围绕内容与娱乐消费业务展开")
         risk_prefix = f"{st_risk_note}" if st_risk_note else ""
         return (
@@ -2364,6 +2609,82 @@ def _valuation_cost_effectiveness(
     }
 
 
+def _rolling_anchor_error(closes: List[float]) -> Optional[float]:
+    """Conformal-style calibration: recent error between closes and their prior MA20 anchor."""
+
+    if len(closes) < 45:
+        return None
+    errors: List[float] = []
+    for index in range(22, len(closes)):
+        anchor = _mean(closes[max(0, index - 20):index])
+        close = closes[index]
+        if anchor and close > 0:
+            errors.append(abs(close / anchor - 1.0))
+    recent_errors = errors[-90:]
+    if len(recent_errors) < 18:
+        return None
+    return _quantile(recent_errors, 0.8)
+
+
+def _fundamental_valuation_score(
+    valuation_context: Optional[Dict[str, Any]],
+    financials: Optional[Dict[str, Any]],
+    market: str,
+) -> Optional[float]:
+    """Score 1..9.8: higher means stronger valuation safety margin and quality support."""
+
+    components: List[tuple[Optional[float], float]] = []
+    context = valuation_context or {}
+    historical_scores = [
+        _score_from_low_percentile(context.get("pe_percentile")),
+        _score_from_low_percentile(context.get("pb_percentile")),
+    ]
+    historical_score = _mean([score for score in historical_scores if score is not None])
+    components.append((historical_score, 0.44))
+    components.append((_safe_float(context.get("relative_score")), 0.24))
+    components.append((_safe_float(context.get("peg_score")), 0.10))
+
+    if financials:
+        roe = _safe_float(financials.get("roe"))
+        net_margin = _safe_float(financials.get("net_margin"))
+        operating_cash_flow = _safe_float(financials.get("operating_cash_flow_per_share"))
+        debt_ratio = _safe_float(financials.get("debt_ratio"))
+        net_profit = _safe_float(financials.get("net_profit"))
+        eps = _safe_float(financials.get("eps"))
+        dividend_yield = _safe_float(financials.get("dividend_yield_ttm"))
+        quality_score = 5.0
+        if roe is not None:
+            quality_score += _bounded_signal(roe - 8.0, 22.0, 1.1)
+        if net_margin is not None:
+            quality_score += _bounded_signal(net_margin - 6.0, 20.0, 0.85)
+        if operating_cash_flow is not None:
+            quality_score += 0.55 if operating_cash_flow > 0 else -0.85
+        if debt_ratio is not None and market != "H股":
+            quality_score -= _clamp((debt_ratio - 62.0) / 34.0, 0.0, 1.0)
+        if dividend_yield is not None and dividend_yield >= 2.0:
+            quality_score += min(dividend_yield / 7.5, 0.65)
+        if (net_profit is not None and net_profit < 0) or (eps is not None and eps < 0):
+            quality_score = min(quality_score, 4.2)
+        components.append((_clamp_score(quality_score), 0.22))
+
+    valid_components = [(score, weight) for score, weight in components if score is not None and weight > 0]
+    if not valid_components:
+        return None
+    total_weight = sum(weight for _, weight in valid_components)
+    return _clamp(
+        sum(float(score) * weight for score, weight in valid_components) / total_weight,
+        1.0,
+        9.8,
+    )
+
+
+def _score_to_anchor_tilt(score: Optional[float]) -> float:
+    if score is None:
+        return 0.0
+    # 估值性价比高，合理区间略上移；估值贵或质量差，合理区间略下修。
+    return _clamp((score - 5.4) / 4.4 * 0.105, -0.105, 0.115)
+
+
 def _market_price_round(value: float) -> float:
     if value >= 100:
         return round(value, 3)
@@ -2537,7 +2858,8 @@ def _build_valuation_reason(current_price: float, valuation: Dict[str, Any]) -> 
         advice = "当前处在可观察区间，关键不是猜涨跌，而是看量能和趋势是否继续确认。"
     return (
         f"动态估值区间为{low:.3f}{unit}-{high:.3f}{unit}，由最新价、近阶段日线、均线、支撑阻力、"
-        f"波动率、板块和资讯倾斜共同校准，每日重算；当前{price_position}。{advice}"
+        f"波动率、PE/PB历史分位、同业/PEG、财务质量、板块和资讯倾斜共同校准，每日重算；"
+        f"当前{price_position}。{advice}"
     )
 
 
@@ -2638,6 +2960,7 @@ def _derive_dynamic_valuation(
     news: Optional[List[Dict[str, str]]] = None,
     sectors: Optional[List[Dict[str, str]]] = None,
     financials: Optional[Dict[str, Any]] = None,
+    valuation_context: Optional[Dict[str, Any]] = None,
 ) -> Dict[str, Any]:
     closes = _history_values(history, "close")
     lows = _history_values(history, "low")
@@ -2661,6 +2984,9 @@ def _derive_dynamic_valuation(
         news_balance=news_balance,
         financials=financials,
     )
+    fundamental_score = _fundamental_valuation_score(valuation_context, financials, market)
+    fundamental_tilt = _score_to_anchor_tilt(fundamental_score)
+    calibrated_error = _rolling_anchor_error(closes)
 
     if recent_lows and recent_highs:
         support = _quantile(recent_lows, 0.22) or min(recent_lows)
@@ -2673,10 +2999,22 @@ def _derive_dynamic_valuation(
                 (ma120, 0.18),
             ]
         ) or stable_anchor
-        adjusted_anchor = trend_anchor * (1.0 + quality_tilt)
+        trading_anchor = trend_anchor * (1.0 + quality_tilt)
+        fundamental_anchor = stable_anchor * (1.0 + fundamental_tilt)
+        adjusted_anchor = _weighted_average(
+            [
+                (trading_anchor, 0.62),
+                (fundamental_anchor, 0.38 if fundamental_score is not None else 0.0),
+            ]
+        ) or trading_anchor
         volatility_component = _clamp((volatility or 48.0) / 520.0, 0.08, 0.24)
         atr_component = _clamp((atr_percent or 3.0) / 55.0, 0.03, 0.11)
-        target_half_width = _clamp(0.09 + volatility_component + atr_component, 0.16, 0.34)
+        calibration_component = _clamp(calibrated_error or 0.065, 0.035, 0.16)
+        target_half_width = _clamp(
+            0.07 + volatility_component + atr_component * 0.88 + calibration_component * 0.42,
+            0.16,
+            0.35,
+        )
         support_floor = support
         resistance_ceiling = resistance
         model_low = adjusted_anchor * (1.0 - target_half_width * 0.72)
@@ -2686,8 +3024,9 @@ def _derive_dynamic_valuation(
         low = _clamp(low, adjusted_anchor * 0.68, adjusted_anchor * 0.97)
         high = _clamp(high, adjusted_anchor * 1.08, adjusted_anchor * 1.48)
     else:
-        adjusted_anchor = stable_anchor * (1.0 + quality_tilt)
-        target_half_width = _clamp(0.16 + ((volatility or 45.0) / 500.0), 0.18, 0.34)
+        adjusted_anchor = stable_anchor * (1.0 + quality_tilt + fundamental_tilt * 0.42)
+        calibration_component = _clamp(calibrated_error or 0.075, 0.04, 0.17)
+        target_half_width = _clamp(0.14 + ((volatility or 45.0) / 560.0) + calibration_component * 0.35, 0.18, 0.35)
         low = adjusted_anchor * (1.0 - target_half_width)
         high = adjusted_anchor * (1.0 + target_half_width * 1.25)
 
@@ -2713,16 +3052,20 @@ def _derive_dynamic_valuation(
         "current_price": _market_price_round(current_price),
         "price_position": _price_position(current_price, low, high),
         "source": "computed",
-        "status": "computed_from_stable_quant_model",
+        "status": "computed_from_fundamental_trading_probability_model",
         "inputs": [
             "current_price",
             "stable_price_anchor",
+            "fundamental_valuation_anchor",
+            "historical_pe_pb_percentile",
+            "relative_valuation_or_peg",
             "quantile_support_resistance",
             "ma20",
             "ma60",
             "ma120",
             "atr",
             "volatility",
+            "rolling_error_calibration",
             "news_sector_financial_tilt",
         ],
     }
@@ -4410,7 +4753,24 @@ def _build_dynamic_scores(
         elif (net_profit is not None and net_profit < 0) or (eps is not None and eps < 0):
             dividend_score = min(dividend_score, 3.6)
         elif operating_cash_flow is not None and operating_cash_flow < 0:
-            dividend_score = min(dividend_score, 4.2)
+            # A single recent negative operating-cash-flow period can be seasonal
+            # for otherwise mature companies. Do not erase a real cash dividend
+            # record when profit is positive, debt is controlled and dividend
+            # yield is visible; still cap aggressive scores because cash cover
+            # needs follow-up.
+            seasonality_tolerated = (
+                derived_dividend_yield is not None
+                and derived_dividend_yield >= 3.0
+                and net_profit is not None
+                and net_profit > 0
+                and eps is not None
+                and eps > 0
+                and (debt_ratio is None or debt_ratio < 65)
+            )
+            if seasonality_tolerated:
+                dividend_score = _clamp(dividend_score, 6.4, 7.4)
+            else:
+                dividend_score = min(dividend_score, 4.2)
         score_status = {
             "profitability": "computed_from_financial_indicators",
             "finance": "computed_from_financial_indicators",
@@ -4664,8 +5024,11 @@ def _build_data_audit(pack: Dict[str, Any], recommendation: CommercialAiRecommen
             "section": "估值区间",
             "classification": "computed",
             "status": "ok" if valuation.get("status") else "partial",
-            "evidence": f"由当前价、近{history_count}条日线、稳定价格锚、分位数支撑阻力、MA20/MA60/MA120、ATR和波动率计算。",
-            "action": "这是算法估值区间，不等同于券商目标价。",
+            "evidence": (
+                f"由当前价、近{history_count}条日线、稳定价格锚、PE/PB历史分位、同业/PEG、"
+                "财务质量、分位数支撑阻力、MA20/MA60/MA120、ATR、波动率和历史误差校准计算。"
+            ),
+            "action": "这是动态量化估值区间，不等同于券商目标价或单一DCF目标价。",
         },
         {
             "section": "点位计划",
@@ -4835,6 +5198,7 @@ def _refresh_dynamic_sections(pack: Dict[str, Any]) -> None:
                 news=decision_news,
                 sectors=pack.get("related_sectors") or [],
                 financials=pack.get("_financials"),
+                valuation_context=pack.get("_valuation_context"),
             )
         )
         valuation["marker_percent"] = round(
@@ -5073,6 +5437,8 @@ def _merge_live_market_data(pack: Dict[str, Any], market_data: Dict[str, Any]) -
         stock["currency"] = "HKD" if quote["currency"] == "HKD" else stock.get("currency", quote["currency"])
     valuation = pack["valuation"]
     valuation.update(_derive_dynamic_valuation(float(current_price), history, stock["market"]))
+    if quote.get("market_cap"):
+        valuation["market_cap"] = _market_price_round(float(quote["market_cap"]))
 
     pack["quant_metrics"] = _build_live_quant_metrics(float(current_price), history)
     pack["sniper_points"] = _derive_sniper_points(float(current_price), history, valuation)
@@ -5129,6 +5495,8 @@ def _generic_pack(code: str, market_data: Optional[Dict[str, Any]] = None) -> Di
     stock_name = (identity or {}).get("name") or quote_name
     history = (market_data or {}).get("history") or []
     valuation = _derive_dynamic_valuation(float(current_price), history, market)
+    if isinstance(quote, dict) and quote.get("market_cap"):
+        valuation["market_cap"] = _market_price_round(float(quote["market_cap"]))
     quant_metrics = _build_live_quant_metrics(float(current_price), history)
     sniper_points = _derive_sniper_points(float(current_price), history, valuation)
     return {
@@ -5196,30 +5564,35 @@ def _fallback_recommendation(pack: Dict[str, Any]) -> CommercialAiRecommendation
     scores = pack.get("scores") or []
     score_by_label = {item.get("label"): _safe_float(item.get("score")) for item in scores if isinstance(item, dict)}
     value_score = score_by_label.get("价值") or 5.0
+    value_for_money_score = score_by_label.get("估值性价比") or 5.0
     growth_score = score_by_label.get("成长") or 5.0
+    profitability_score = score_by_label.get("盈利能力") or 5.0
+    finance_score = score_by_label.get("财务") or 5.0
     trend_label = (_metric_by_label(pack.get("quant_metrics") or [], "均线结构") or {}).get("value", "待读取")
     volume_state = (_metric_by_label(pack.get("quant_metrics") or [], "量价确认") or {}).get("percentile", "待读取")
     sniper_points = pack.get("sniper_points") or []
     focus = sniper_points[0]["description"] if sniper_points else "待读取"
     confirm = float(sniper_points[1]["price"]) if len(sniper_points) > 1 else current_price * 1.08
     invalid = float(sniper_points[2]["price"]) if len(sniper_points) > 2 else current_price * 0.88
+    quantified_action = _classify_recommendation_action(pack)
+    action = quantified_action["action"]
+    summary = quantified_action["summary"]
     if current_price < valuation_low:
-        if growth_score >= 6.2 and trend_label in {"多头", "修复"}:
-            action = "逢低关注"
-            summary = "估值有折价，成长和趋势仍可跟踪。"
-        else:
-            action = "观察"
-            summary = "估值有折价，但趋势验证不足，先看承接。"
+        default_focus = (
+            "估值有折价，成长和趋势仍可跟踪。"
+            if growth_score >= 6.2 and trend_label in {"多头", "修复"}
+            else "估值有折价，但趋势验证不足，先看承接。"
+        )
     elif current_price <= valuation_high:
-        if value_score >= 6.5 and growth_score >= 6.6 and volume_state in {"放量", "正常"}:
-            action = "逢低关注"
-            summary = "估值仍有赔率，量价验证后更适合推进。"
-        else:
-            action = "观察"
-            summary = "估值位于合理区间内，关注量价验证。"
+        default_focus = (
+            "估值仍有赔率，量价验证后更适合推进。"
+            if value_score >= 6.5 and growth_score >= 6.6 and volume_state in {"放量", "正常"}
+            else "估值位于合理区间内，关注量价验证。"
+        )
     else:
-        action = "谨慎"
-        summary = "谨慎：价格高于动态估值区间上沿，先控制追高风险。"
+        default_focus = "谨慎：价格高于动态估值区间上沿，先控制追高风险。"
+    if not summary:
+        summary = default_focus
     unit = valuation["currency_label"].split("/")[0]
     sector_names = [
         item.get("name", "")
@@ -5238,14 +5611,281 @@ def _fallback_recommendation(pack: Dict[str, Any]) -> CommercialAiRecommendation
         status="fallback",
         action=action,
         summary=summary,
-        entry_plan=f"{focus} 若放量站稳{confirm:.3f}{unit}，趋势验证度提升。",
+        entry_plan=(
+            f"当前满足高置信门槛：成长{growth_score:.1f}、估值性价比{value_for_money_score:.1f}、"
+            f"盈利/财务{profitability_score:.1f}/{finance_score:.1f}；可分批买入，"
+            f"若放量站稳{confirm:.3f}{unit}再提高仓位。"
+            if action == "积极买入"
+            else (
+                f"当前风险分{quantified_action['risk_score']:.0f}偏高，不新开仓；若跌破{invalid:.3f}{unit}先规避。"
+                if action == "回避"
+                else f"{focus} 若放量站稳{confirm:.3f}{unit}，趋势验证度提升。"
+            )
+        ),
         risk_trigger=f"若跌破{invalid:.3f}{unit}，说明短线承接失败，应优先控制回撤。",
         evidence_summary=[
             f"当前价{current_price:.3f}{unit}，{valuation['price_position']}",
+            f"动作量化：机会分{quantified_action['opportunity_score']:.0f}，风险分{quantified_action['risk_score']:.0f}",
             "量化指标：" + ("；".join(quant_preview) if quant_preview else "待读取"),
             "关联板块：" + ("、".join(sector_names) if sector_names else "待读取"),
         ],
     )
+
+
+def _financial_red_flags(financials: Dict[str, Any], *, is_financial_institution: bool = False) -> List[str]:
+    flags: List[str] = []
+    for key, label in [
+        ("net_profit", "净利润亏损"),
+        ("deducted_net_profit", "扣非亏损"),
+        ("eps", "EPS为负"),
+        ("operating_cash_flow_per_share", "经营现金流为负"),
+        ("net_margin", "净利率为负"),
+    ]:
+        value = _safe_float(financials.get(key))
+        if value is not None and value < 0:
+            flags.append(label)
+    debt_ratio = _safe_float(financials.get("debt_ratio"))
+    if debt_ratio is not None and debt_ratio >= (88 if is_financial_institution else 75):
+        flags.append("负债率偏高")
+    return flags
+
+
+def _recommendation_quant_inputs(pack: Dict[str, Any]) -> Dict[str, Any]:
+    stock = pack.get("stock") or {}
+    valuation = pack.get("valuation") or {}
+    scores = pack.get("scores") or []
+    quant_metrics = pack.get("quant_metrics") or []
+    news = pack.get("news") or []
+    financials = pack.get("_financials") or {}
+    current_price = _safe_float(valuation.get("current_price"))
+    valuation_low = _safe_float(valuation.get("low"))
+    valuation_high = _safe_float(valuation.get("high"))
+    score_by_label = {
+        str(item.get("label") or ""): _safe_float(item.get("score"))
+        for item in scores
+        if isinstance(item, dict)
+    }
+    name_code = _compact_query(f"{stock.get('name') or ''}{stock.get('code') or ''}")
+    is_st_stock = "st" in name_code
+    is_financial_institution = any(
+        keyword in name_code
+        for keyword in ("银行", "保險", "保险", "券商", "证券", "證券", "bank", "insurance")
+    )
+    return {
+        "stock": stock,
+        "valuation": valuation,
+        "financials": financials,
+        "current_price": current_price,
+        "valuation_low": valuation_low,
+        "valuation_high": valuation_high,
+        "value_score": score_by_label.get("价值") or 0.0,
+        "value_for_money_score": score_by_label.get("估值性价比") or 0.0,
+        "growth_score": score_by_label.get("成长") or 0.0,
+        "profitability_score": score_by_label.get("盈利能力") or 0.0,
+        "finance_score": score_by_label.get("财务") or 0.0,
+        "dividend_score": score_by_label.get("分红") or 0.0,
+        "trend_label": (_metric_by_label(quant_metrics, "均线结构") or {}).get("value"),
+        "volume_state": (_metric_by_label(quant_metrics, "量价确认") or {}).get("percentile"),
+        "volatility": _parse_metric_float((_metric_by_label(quant_metrics, "年化波动率") or {}).get("value")),
+        "news_counts": _news_signal_counts(news),
+        "is_st_stock": is_st_stock,
+        "red_flags": _financial_red_flags(financials, is_financial_institution=is_financial_institution),
+    }
+
+
+def _classify_recommendation_action(pack: Dict[str, Any]) -> Dict[str, Any]:
+    """Quantitative action tier for 积极买入/逢低关注/观察/谨慎/回避."""
+
+    inputs = _recommendation_quant_inputs(pack)
+    current_price = inputs["current_price"]
+    valuation_low = inputs["valuation_low"]
+    valuation_high = inputs["valuation_high"]
+    if current_price is None or valuation_low is None or valuation_high is None or valuation_high <= valuation_low:
+        return {
+            "action": "观察",
+            "summary": "数据覆盖不足，先等实时量价验证。",
+            "opportunity_score": 50.0,
+            "risk_score": 50.0,
+            "relative_position": None,
+            "reason": "估值区间或当前价数据不足",
+        }
+
+    relative_position = (current_price - valuation_low) / max(0.01, valuation_high - valuation_low)
+    if current_price < valuation_low:
+        valuation_score = 78.0
+        price_risk = 38.0
+    elif relative_position <= 0.35:
+        valuation_score = 84.0
+        price_risk = 24.0
+    elif relative_position <= 0.68:
+        valuation_score = 72.0
+        price_risk = 34.0
+    elif relative_position <= 1.0:
+        valuation_score = 55.0
+        price_risk = 50.0
+    else:
+        valuation_score = max(18.0, 46.0 - min(28.0, (relative_position - 1.0) * 48.0))
+        price_risk = min(88.0, 58.0 + (relative_position - 1.0) * 45.0)
+
+    trend_label = inputs["trend_label"]
+    trend_score = {"多头": 84.0, "修复": 72.0, "承压": 38.0, "转弱": 24.0}.get(str(trend_label), 50.0)
+    volume_state = inputs["volume_state"]
+    volume_score = {"放量": 82.0, "正常": 66.0, "缩量": 38.0, "转弱": 28.0}.get(str(volume_state), 50.0)
+    volatility = inputs["volatility"]
+    volatility_risk = 34.0
+    if volatility is not None:
+        volatility_risk = _clamp(24.0 + max(0.0, volatility - 45.0) * 0.42, 24.0, 86.0)
+
+    news_counts = inputs["news_counts"]
+    news_balance = news_counts["positive"] - news_counts["risk"]
+    news_score = _clamp(52.0 + news_balance * 5.0, 30.0, 78.0)
+    news_risk = _clamp(34.0 + news_counts["risk"] * 8.0 - news_counts["positive"] * 2.5, 24.0, 82.0)
+    financial_risk = (
+        26.0
+        + max(0.0, 5.2 - inputs["profitability_score"]) * 7.0
+        + max(0.0, 5.2 - inputs["finance_score"]) * 7.0
+        + len(inputs["red_flags"]) * 11.0
+        + (24.0 if inputs["is_st_stock"] else 0.0)
+    )
+    risk_score = _clamp(
+        price_risk * 0.28
+        + volatility_risk * 0.18
+        + news_risk * 0.18
+        + financial_risk * 0.36,
+        12.0,
+        96.0,
+    )
+    opportunity_score = _clamp(
+        inputs["growth_score"] * 10.0 * 0.20
+        + inputs["value_for_money_score"] * 10.0 * 0.20
+        + inputs["value_score"] * 10.0 * 0.10
+        + inputs["profitability_score"] * 10.0 * 0.12
+        + inputs["finance_score"] * 10.0 * 0.12
+        + valuation_score * 0.14
+        + trend_score * 0.08
+        + volume_score * 0.04,
+        5.0,
+        95.0,
+    )
+
+    severe_financial_risk = inputs["is_st_stock"] or len(inputs["red_flags"]) >= 2
+    trend_confirmed = trend_label in {"多头", "修复"}
+    low_position_absorption = (
+        trend_label == "承压"
+        and volume_state == "正常"
+        and relative_position <= 0.18
+        and risk_score <= 32
+    )
+    if (
+        opportunity_score >= 70
+        and risk_score <= 32
+        and relative_position <= 0.45
+        and inputs["growth_score"] >= 7.0
+        and inputs["value_for_money_score"] >= 7.0
+        and inputs["profitability_score"] >= 5.0
+        and inputs["finance_score"] >= 5.0
+        and (trend_confirmed or low_position_absorption)
+        and volume_state in {"放量", "正常"}
+        and not severe_financial_risk
+    ):
+        action = "积极买入"
+        summary = (
+            "低位赔率较高，可分批积极参与。"
+            if low_position_absorption and not trend_confirmed
+            else "成长、估值和量价共振，可按纪律参与。"
+        )
+    elif risk_score >= 74 or (inputs["is_st_stock"] and (risk_score >= 58 or current_price > valuation_high)):
+        action = "回避"
+        summary = "风险分过高，先不参与。"
+    elif risk_score >= 56 or current_price > valuation_high or inputs["finance_score"] < 4.0 or inputs["profitability_score"] < 3.2:
+        action = "谨慎"
+        summary = "风险或估值压力偏高，先控制追高。"
+    elif relative_position >= 0.78 and inputs["value_for_money_score"] < 6.0:
+        action = "观察"
+        summary = "接近估值上沿，性价比不足，先等回落。"
+    elif opportunity_score >= 62 and risk_score <= 58 and current_price <= valuation_high:
+        action = "逢低关注"
+        summary = "赔率尚可，等回落和量价验证。"
+    else:
+        action = "观察"
+        summary = "信号未共振，先看量价验证。"
+
+    return {
+        "action": action,
+        "summary": summary,
+        "opportunity_score": round(opportunity_score, 2),
+        "risk_score": round(risk_score, 2),
+        "relative_position": round(relative_position, 3),
+        "reason": (
+            f"机会分{opportunity_score:.0f}，风险分{risk_score:.0f}，"
+            f"估值位置{relative_position:.2f}，趋势{trend_label or '未知'}，量价{volume_state or '未知'}"
+        ),
+    }
+
+
+def _active_buy_gate(pack: Dict[str, Any]) -> Dict[str, Any]:
+    """Strict gate for the commercial '积极买入' action.
+
+    This is intentionally narrower than a generic bullish view: it requires
+    valuation cushion, growth quality, price-volume confirmation and no obvious
+    financial distress. DeepSeek can only use 积极买入 when this gate allows it.
+    """
+
+    inputs = _recommendation_quant_inputs(pack)
+    current_price = inputs["current_price"]
+    valuation_low = inputs["valuation_low"]
+    valuation_high = inputs["valuation_high"]
+    if current_price is None or valuation_low is None or valuation_high is None or valuation_high <= valuation_low:
+        return {"allowed": False, "reason": "估值区间或当前价数据不足"}
+    growth_score = inputs["growth_score"]
+    value_score = inputs["value_score"]
+    value_for_money_score = inputs["value_for_money_score"]
+    profitability_score = inputs["profitability_score"]
+    finance_score = inputs["finance_score"]
+    trend_label = inputs["trend_label"]
+    volume_state = inputs["volume_state"]
+    volatility = inputs["volatility"]
+    news_counts = inputs["news_counts"]
+    relative_position = (current_price - valuation_low) / max(0.01, valuation_high - valuation_low)
+    is_st_stock = inputs["is_st_stock"]
+    red_flags = inputs["red_flags"]
+
+    checks = [
+        (not is_st_stock, "ST股票不触发积极买入"),
+        (not red_flags, "财务红旗：" + "、".join(red_flags[:3])),
+        (current_price <= valuation_high and relative_position <= 0.68, "价格接近或高于估值上沿"),
+        (growth_score >= 7.0, "成长分不足7.0"),
+        (value_for_money_score >= 6.6 or value_score >= 6.8, "估值赔率不足"),
+        (profitability_score >= 5.0 and finance_score >= 5.0, "盈利或财务质量不足"),
+        (trend_label in {"多头", "修复"}, "均线结构未进入多头/修复"),
+        (volume_state in {"放量", "正常"}, "量价状态未验证"),
+        ((volatility is None) or volatility <= 120, "波动率过高"),
+        (news_counts["risk"] <= max(1, news_counts["positive"] + news_counts["neutral"]), "利空资讯过多"),
+    ]
+    failed = [reason for ok, reason in checks if not ok]
+    if failed:
+        return {
+            "allowed": False,
+            "reason": failed[0],
+            "relative_position": round(relative_position, 3),
+        }
+
+    conviction = (
+        growth_score * 0.27
+        + value_for_money_score * 0.24
+        + value_score * 0.12
+        + profitability_score * 0.13
+        + finance_score * 0.12
+        + (1.0 if trend_label == "多头" else 0.65)
+        + (0.55 if volume_state == "放量" else 0.25)
+        + min(0.35, news_counts["positive"] * 0.08)
+    )
+    return {
+        "allowed": conviction >= 6.9,
+        "reason": "成长、估值、趋势和财务同时过线" if conviction >= 6.9 else "综合置信度不足",
+        "conviction": round(conviction, 2),
+        "relative_position": round(relative_position, 3),
+    }
 
 
 def _polish_recommendation_text(value: Any) -> str:
@@ -5282,6 +5922,18 @@ def _polish_recommendation(recommendation: CommercialAiRecommendation) -> Commer
 
 
 def _build_deepseek_prompt(pack: Dict[str, Any]) -> str:
+    quantified_action = _classify_recommendation_action(pack)
+    active_buy_gate = {
+        "allowed": quantified_action.get("action") == "积极买入",
+        "reason": quantified_action.get("reason"),
+        "opportunity_score": quantified_action.get("opportunity_score"),
+        "risk_score": quantified_action.get("risk_score"),
+    }
+    allowed_actions = (
+        "积极买入/逢低关注/观察/谨慎/回避"
+        if active_buy_gate.get("allowed")
+        else "逢低关注/观察/谨慎/回避"
+    )
     decision_pack = {
         "stock": pack["stock"],
         "company_profile": pack.get("_company_profile") or {},
@@ -5295,6 +5947,9 @@ def _build_deepseek_prompt(pack: Dict[str, Any]) -> str:
         "news_summary": pack.get("_news_summary") or {},
         "news": pack["news"],
         "investment_hypotheses": pack.get("investment_hypotheses") or [],
+        "active_buy_gate": active_buy_gate,
+        "quantified_action": quantified_action,
+        "allowed_actions": allowed_actions,
         "data_status": {
             "quote": pack.get("_quote_status") or "pending",
             "sectors": pack.get("_sector_status") or "pending",
@@ -5309,6 +5964,9 @@ def _build_deepseek_prompt(pack: Dict[str, Any]) -> str:
             "成长评分是核心变量，它代表未来行业空间、公司护城河/卡位、商业化兑现和趋势验证，不能简化成短线涨幅。"
             "如果公司处在未来高增长行业且有强护城河，可以给更积极的跟踪建议；"
             "但不能只因为题材好或价格低于估值区间就直接推荐，必须同时看动态估值区间、确认位、失效位、财务风险和量价状态。"
+            "只有 active_buy_gate.allowed=true 时，action 才允许使用“积极买入”；否则禁止使用积极买入。"
+            "action必须遵循 quantified_action.action；你只能解释量化动作，不能自行升级动作分类。"
+            "如果使用积极买入，必须写成分批参与和确认位加仓，不得暗示满仓、稳赚或无风险。"
             "面向用户的措辞不要出现“待确认”“等待确认”，改用趋势验证、量价验证或观察验证。"
             "不要写聊天式回答，不要展开长篇解释。"
         ),
@@ -5673,11 +6331,54 @@ def _financial_risk_note(financials: Optional[Dict[str, Any]]) -> str:
     return "；当前" + "、".join(flags[:5]) + "，需要后续数据验证改善"
 
 
+_COMPANY_BASIC_FORBIDDEN_BY_CATEGORY: Dict[str, tuple[str, ...]] = {
+    "baijiu": ("影视", "电影", "传媒", "内容ip", "院线", "剧集", "半导体", "银行金融", "新能源车"),
+    "bank": ("影视", "电影", "内容ip", "新能源车", "白酒", "半导体", "互联网平台"),
+    "insurance": ("银行金融机构", "证券承销", "白酒", "半导体", "新能源车"),
+    "broker_exchange": ("银行金融机构", "白酒", "新能源车", "影视娱乐"),
+    "semiconductor_material": ("白酒", "银行金融", "影视娱乐", "内容ip", "新能源车/动力电池", "橡胶助剂"),
+    "semiconductor_chip": ("白酒", "银行金融", "影视娱乐", "内容ip", "新能源车/动力电池"),
+    "internet_platform": ("白酒", "银行金融", "橡胶助剂", "半导体材料", "新能源车/动力电池"),
+    "telecom": ("互联网平台型", "白酒", "银行金融", "影视娱乐"),
+    "security_iot": ("新能源车/动力电池", "白酒", "银行金融", "影视娱乐"),
+    "lithium_material": ("橡胶助剂", "白酒", "银行金融", "影视娱乐"),
+    "renewable_power": ("新能源车/动力电池链条", "橡胶助剂", "白酒", "银行金融", "影视娱乐", "半导体材料链条"),
+    "media_content": ("银行金融", "白酒", "新能源车/动力电池", "半导体材料"),
+}
+
+
+def _company_basic_mismatch(
+    text: str,
+    profile: Dict[str, Any],
+    sectors: List[Dict[str, str]],
+    stock: Dict[str, Any],
+) -> bool:
+    category = _infer_company_business_category(profile, sectors, stock)
+    if not category:
+        return False
+    compact = _compact_query(text)
+    forbidden = _COMPANY_BASIC_FORBIDDEN_BY_CATEGORY.get(category) or ()
+    if _has_any_term(compact, forbidden):
+        return True
+
+    required_terms: Dict[str, tuple[str, ...]] = {
+        "baijiu": ("白酒", "酒", "茅台"),
+        "bank": ("银行", "存贷款", "净息差"),
+        "insurance": ("保险", "寿险", "财险", "新业务价值"),
+        "broker_exchange": ("证券", "交易", "资本市场", "券商"),
+        "telecom": ("通信", "电讯", "运营商", "网络"),
+        "media_content": ("影视", "内容", "ip", "品牌授权", "院线"),
+    }
+    terms = required_terms.get(category)
+    return bool(terms and not _has_any_term(compact, terms))
+
+
 def _format_deepseek_company_basic(
     parsed: Dict[str, Any],
     stock: Dict[str, Any],
     company_profile: Optional[Dict[str, Any]] = None,
     financials: Optional[Dict[str, Any]] = None,
+    sectors: Optional[List[Dict[str, str]]] = None,
 ) -> Optional[str]:
     required_fields = [
         ("公司定位", "company_position", 82),
@@ -5712,7 +6413,10 @@ def _format_deepseek_company_basic(
             locked_clauses.append(f"观察重点：{watch_points}。")
         if risk_boundary or risk_note:
             locked_clauses.append(f"风险边界：{risk_boundary}{risk_note}。")
-        return "".join(locked_clauses)
+        locked_text = "".join(locked_clauses)
+        if _company_basic_mismatch(locked_text, profile, sectors or [], stock):
+            return None
+        return locked_text
 
     text = "".join(clauses)
     forbidden = ("待确认", "待读取", "作为AI", "不构成投资建议", "保证收益", "一定上涨", "建议买入")
@@ -5722,6 +6426,8 @@ def _format_deepseek_company_basic(
     stock_name = _compact_query(str(stock.get("name") or ""))
     if stock_name and len(stock_name) >= 3 and stock_name not in compact:
         text = f"公司定位：{stock.get('name')}，{clauses[0].split('：', 1)[1]}" + "".join(clauses[1:])
+    if _company_basic_mismatch(text, profile, sectors or [], stock):
+        return None
     return text
 
 
@@ -5782,6 +6488,7 @@ def _try_deepseek_company_basic_reason(pack: Dict[str, Any]) -> Optional[str]:
             pack.get("stock") or {},
             pack.get("_company_profile") or {},
             pack.get("_financials") or {},
+            pack.get("related_sectors") or [],
         )
     except Exception as exc:  # noqa: BLE001 - company basic block can keep local fallback.
         logger.warning("[commercial-analysis] DeepSeek company basic fallback: %s", exc)
@@ -5809,7 +6516,8 @@ def _try_deepseek_recommendation(pack: Dict[str, Any]) -> Optional[CommercialAiR
                 "content": (
                     "你是A股和港股量化投研助手，只输出JSON。"
                     "字段必须包含 action, summary, entry_plan, risk_trigger, evidence_summary。"
-                    "action用逢低关注/观察/谨慎/回避之一；summary不超过36个中文字符。"
+                    "action必须从用户输入allowed_actions中选择；summary不超过36个中文字符。"
+                    "只有active_buy_gate.allowed=true时才允许输出积极买入。"
                 ),
             },
             {"role": "user", "content": _build_deepseek_prompt(pack)},
@@ -5833,11 +6541,13 @@ def _try_deepseek_recommendation(pack: Dict[str, Any]) -> Optional[CommercialAiR
         evidence_summary = parsed.get("evidence_summary") or []
         if isinstance(evidence_summary, str):
             evidence_summary = [evidence_summary]
+        quantified_action = _classify_recommendation_action(pack)
+        action = quantified_action["action"]
         return CommercialAiRecommendation(
             source="deepseek",
             model=model,
             status="ok",
-            action=str(parsed.get("action") or "观察"),
+            action=action,
             summary=str(parsed.get("summary") or _fallback_recommendation(pack).summary),
             entry_plan=str(parsed.get("entry_plan") or _fallback_recommendation(pack).entry_plan),
             risk_trigger=str(parsed.get("risk_trigger") or _fallback_recommendation(pack).risk_trigger),
@@ -5924,6 +6634,7 @@ def _build_response(stock_code: str) -> CommercialAnalysisResponse:
         pack["stock"]["name"],
     )
     pack["_financials"] = _fetch_financial_snapshot(code)
+    pack["_valuation_context"] = _fetch_valuation_ratio_context(code)
     _refresh_dynamic_sections(pack)
     deepseek_company_basic = _try_deepseek_company_basic_reason(pack)
     if deepseek_company_basic:
