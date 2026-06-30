@@ -110,7 +110,7 @@ class StockService:
             logger.error(f"获取实时行情失败: {e}", exc_info=True)
             return None
 
-    def get_hot_stocks(self, limit: int = 10) -> Dict[str, Any]:
+    def get_hot_stocks(self, limit: int = 10, timeout_seconds: Optional[float] = None) -> Dict[str, Any]:
         """
         获取市场热门股，并用排名、涨跌幅、成交额生成稳定的热度分。
 
@@ -130,7 +130,7 @@ class StockService:
                 "stocks": [dict(item) for item in payload.get("stocks", [])],
             }
 
-        rows = self._fetch_hot_rows_with_timeout(cache_limit)
+        rows = self._fetch_hot_rows_with_timeout(cache_limit, timeout_seconds=timeout_seconds)
         stocks = self._build_hot_stock_items(rows, cache_limit)
         if not stocks:
             logger.warning("[人气股] 实时热榜暂不可用，使用快速热门候选兜底")
@@ -148,8 +148,12 @@ class StockService:
             })
         return result
 
-    def _fetch_hot_rows_with_timeout(self, limit: int) -> List[Dict[str, Any]]:
-        timeout_seconds = _hot_stocks_timeout_seconds()
+    def _fetch_hot_rows_with_timeout(self, limit: int, timeout_seconds: Optional[float] = None) -> List[Dict[str, Any]]:
+        timeout_seconds = (
+            max(0.4, min(float(timeout_seconds), 8.0))
+            if timeout_seconds is not None
+            else _hot_stocks_timeout_seconds()
+        )
         future = _HOT_STOCKS_FETCH_EXECUTOR.submit(self._fetch_remote_hot_rows, limit)
         future.add_done_callback(lambda done: self._cache_completed_hot_rows(done, limit))
         try:

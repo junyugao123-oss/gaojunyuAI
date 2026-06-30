@@ -11,6 +11,7 @@ import re
 import statistics
 import subprocess
 import time
+from concurrent.futures import ThreadPoolExecutor, TimeoutError as FuturesTimeoutError, as_completed
 from html import unescape as html_unescape
 from datetime import datetime
 from functools import lru_cache
@@ -29,6 +30,7 @@ from api.v1.schemas.commercial_analysis import (
     CommercialDataAuditItem,
     CommercialDataQuality,
     CommercialDecisionReason,
+    CommercialHotRecommendationResponse,
     CommercialIndustryTrend,
     CommercialIndustryTrendItem,
     CommercialInvestmentHypothesis,
@@ -72,6 +74,11 @@ _VALUATION_RATIO_CACHE: Dict[str, tuple[float, Optional[Dict[str, Any]]]] = {}
 _VALUATION_RATIO_CACHE_SECONDS = 21600
 _COMPANY_PROFILE_CACHE: Dict[str, tuple[float, Dict[str, Any]]] = {}
 _COMPANY_PROFILE_CACHE_SECONDS = 3600
+_HOT_RECOMMENDATION_CACHE: Dict[str, tuple[float, CommercialHotRecommendationResponse]] = {}
+_HOT_RECOMMENDATION_CACHE_SECONDS = 90
+_HOT_RECOMMENDATION_EXECUTOR = ThreadPoolExecutor(max_workers=5, thread_name_prefix="hot-recommend")
+_HOT_RECOMMENDATION_SCAN_SECONDS = 6.0
+_HOT_RECOMMENDATION_SOURCE_SECONDS = 1.2
 
 _VERIFIED_COMPANY_PROFILES: Dict[str, Dict[str, Any]] = {
     "600519.SH": {
@@ -5847,29 +5854,54 @@ def _classify_recommendation_action(pack: Dict[str, Any]) -> Dict[str, Any]:
 
     severe_financial_risk = inputs["is_st_stock"] or len(inputs["red_flags"]) >= 2
     trend_confirmed = trend_label in {"多头", "修复"}
+    volume_confirmed = volume_state in {"放量", "正常"}
+    volatility_ok = volatility is None or volatility <= 125
+    news_not_overwhelming = news_counts["risk"] <= max(1, news_counts["positive"] + news_counts["neutral"])
+    quality_floor_ok = (
+        inputs["profitability_score"] >= 4.8
+        and inputs["finance_score"] >= 4.8
+        and not severe_financial_risk
+        and volatility_ok
+        and news_not_overwhelming
+    )
+    value_anchor_ok = inputs["value_for_money_score"] >= 6.2 or inputs["value_score"] >= 6.5
     low_position_absorption = (
         trend_label == "承压"
-        and volume_state == "正常"
-        and relative_position <= 0.18
-        and risk_score <= 32
+        and volume_confirmed
+        and relative_position <= 0.32
+        and risk_score <= 42
     )
-    if (
-        opportunity_score >= 70
-        and risk_score <= 32
-        and relative_position <= 0.45
-        and inputs["growth_score"] >= 7.0
-        and inputs["value_for_money_score"] >= 7.0
+    low_value_active = (
+        opportunity_score >= 68.5
+        and risk_score <= 42
+        and relative_position <= 0.52
+        and inputs["growth_score"] >= 6.4
+        and value_anchor_ok
+        and quality_floor_ok
+        and (trend_confirmed or low_position_absorption)
+        and volume_confirmed
+    )
+    growth_momentum_active = (
+        opportunity_score >= 74
+        and risk_score <= 44
+        and 0.18 <= relative_position <= 0.85
+        and current_price <= valuation_high
+        and inputs["growth_score"] >= 7.6
+        and (inputs["value_for_money_score"] >= 5.6 or inputs["value_score"] >= 5.8)
         and inputs["profitability_score"] >= 5.0
         and inputs["finance_score"] >= 5.0
-        and (trend_confirmed or low_position_absorption)
-        and volume_state in {"放量", "正常"}
+        and trend_confirmed
+        and volume_state == "放量"
         and not severe_financial_risk
-    ):
+        and volatility_ok
+        and news_not_overwhelming
+    )
+    if low_value_active or growth_momentum_active:
         action = "积极买入"
         summary = (
             "低位赔率较高，可分批积极参与。"
             if low_position_absorption and not trend_confirmed
-            else "成长、估值和量价共振，可按纪律参与。"
+            else "估值、成长和量价共振，可按纪律分批参与。"
         )
     elif risk_score >= 74 or (inputs["is_st_stock"] and (risk_score >= 58 or current_price > valuation_high)):
         action = "回避"
@@ -5930,13 +5962,13 @@ def _active_buy_gate(pack: Dict[str, Any]) -> Dict[str, Any]:
     checks = [
         (not is_st_stock, "ST股票不触发积极买入"),
         (not red_flags, "财务红旗：" + "、".join(red_flags[:3])),
-        (current_price <= valuation_high and relative_position <= 0.68, "价格接近或高于估值上沿"),
-        (growth_score >= 7.0, "成长分不足7.0"),
-        (value_for_money_score >= 6.6 or value_score >= 6.8, "估值赔率不足"),
-        (profitability_score >= 5.0 and finance_score >= 5.0, "盈利或财务质量不足"),
-        (trend_label in {"多头", "修复"}, "均线结构未进入多头/修复"),
+        (current_price <= valuation_high and relative_position <= 0.85, "价格接近或高于估值上沿"),
+        (growth_score >= 6.4, "成长分不足6.4"),
+        (value_for_money_score >= 5.6 or value_score >= 5.8, "估值赔率不足"),
+        (profitability_score >= 4.8 and finance_score >= 4.8, "盈利或财务质量不足"),
+        (trend_label in {"多头", "修复"} or relative_position <= 0.32, "均线结构未进入多头/修复"),
         (volume_state in {"放量", "正常"}, "量价状态未验证"),
-        ((volatility is None) or volatility <= 120, "波动率过高"),
+        ((volatility is None) or volatility <= 125, "波动率过高"),
         (news_counts["risk"] <= max(1, news_counts["positive"] + news_counts["neutral"]), "利空资讯过多"),
     ]
     failed = [reason for ok, reason in checks if not ok]
@@ -5958,8 +5990,8 @@ def _active_buy_gate(pack: Dict[str, Any]) -> Dict[str, Any]:
         + min(0.35, news_counts["positive"] * 0.08)
     )
     return {
-        "allowed": conviction >= 6.9,
-        "reason": "成长、估值、趋势和财务同时过线" if conviction >= 6.9 else "综合置信度不足",
+        "allowed": conviction >= 6.55,
+        "reason": "成长、估值、趋势和财务同时过线" if conviction >= 6.55 else "综合置信度不足",
         "conviction": round(conviction, 2),
         "relative_position": round(relative_position, 3),
     }
@@ -6757,6 +6789,136 @@ def _build_response(stock_code: str) -> CommercialAnalysisResponse:
     )
 
 
+def _build_hot_recommendation_pack(code: str) -> Optional[Dict[str, Any]]:
+    market_data = _try_tencent_market_data(code) or _try_stock_api_market_data(code)
+    if not market_data:
+        return None
+
+    pack = _generic_pack(code, market_data)
+    _merge_live_market_data(pack, market_data)
+    stock = pack.get("stock") or {}
+    pack["related_sectors"] = _fetch_related_sectors(code, stock.get("market") or "A股") or []
+    pack["_company_profile"] = _fetch_company_profile(
+        code,
+        stock.get("market") or "A股",
+        stock.get("name") or code,
+    )
+    pack["_financials"] = _fetch_financial_snapshot(code)
+    pack["_valuation_context"] = _fetch_valuation_ratio_context(code)
+    _refresh_dynamic_sections(pack)
+    return pack
+
+
+def _search_item_from_pack(pack: Dict[str, Any], *, score: float = 100.0) -> CommercialSearchItem:
+    stock = pack.get("stock") or {}
+    code = str(stock.get("code") or "").strip()
+    name = str(stock.get("name") or code).strip()
+    aliases = [name, code]
+    identity = _catalog_identity(code)
+    if identity:
+        aliases.extend(str(alias) for alias in (identity.get("aliases") or []) if alias)
+        aliases.append(str(identity.get("display_code") or ""))
+        aliases.append(str(identity.get("canonical_code") or ""))
+    return CommercialSearchItem(
+        name=name,
+        code=code,
+        market=str(stock.get("market") or "A股"),
+        exchange=stock.get("exchange"),
+        aliases=list(dict.fromkeys(alias for alias in aliases if alias)),
+        score=round(score, 2),
+    )
+
+
+def _empty_hot_recommendation(action: str, reason: str) -> CommercialHotRecommendationResponse:
+    return CommercialHotRecommendationResponse(
+        stock=None,
+        action=action,
+        summary="",
+        reason=reason,
+        generated_at=_now_iso(),
+    )
+
+
+def _evaluate_hot_recommendation_candidate(index: int, candidate: Dict[str, Any]) -> Optional[Dict[str, Any]]:
+    raw_code = str(candidate.get("code") or "").strip()
+    if not raw_code:
+        return None
+    code = _normalize_code(raw_code)
+    pack = _build_hot_recommendation_pack(code)
+    if not pack:
+        return None
+    quantified = _classify_recommendation_action(pack)
+    if quantified.get("action") != "积极买入":
+        return None
+    return {
+        "index": index,
+        "candidate": candidate,
+        "pack": pack,
+        "quantified": quantified,
+    }
+
+
+def _build_hot_recommendation(limit: int) -> CommercialHotRecommendationResponse:
+    bounded_limit = max(5, min(limit, 24))
+    cache_key = str(bounded_limit)
+    now = time.time()
+    cached = _HOT_RECOMMENDATION_CACHE.get(cache_key)
+    if cached and now - cached[0] <= _HOT_RECOMMENDATION_CACHE_SECONDS:
+        return cached[1]
+
+    try:
+        from src.services.stock_service import StockService
+
+        hot_payload = StockService().get_hot_stocks(
+            bounded_limit,
+            timeout_seconds=_HOT_RECOMMENDATION_SOURCE_SECONDS,
+        )
+        hot_stocks = hot_payload.get("stocks") or []
+    except Exception as exc:  # noqa: BLE001 - homepage can gracefully keep normal placeholder.
+        logger.warning("[commercial-analysis] hot recommendation source failed: %s", exc)
+        response = _empty_hot_recommendation("待加载", "热门候选暂不可用")
+        _HOT_RECOMMENDATION_CACHE[cache_key] = (now, response)
+        return response
+
+    futures = {
+        _HOT_RECOMMENDATION_EXECUTOR.submit(_evaluate_hot_recommendation_candidate, index, candidate): (index, candidate)
+        for index, candidate in enumerate(hot_stocks[:bounded_limit], start=1)
+        if candidate.get("code")
+    }
+    try:
+        for future in as_completed(futures, timeout=_HOT_RECOMMENDATION_SCAN_SECONDS):
+            index, candidate = futures[future]
+            try:
+                result = future.result()
+            except Exception as exc:  # noqa: BLE001 - skip one bad candidate, keep scanning.
+                logger.info("[commercial-analysis] skip hot candidate %s: %s", candidate.get("code"), exc)
+                continue
+            if result:
+                pack = result["pack"]
+                quantified = result["quantified"]
+                hot_score = _safe_float(candidate.get("hot_score")) or max(1.0, 100.0 - index * 3.0)
+                reason_parts = [
+                    "积极买入",
+                    str(candidate.get("reason") or "").strip(),
+                    quantified.get("reason") or "",
+                ]
+                response = CommercialHotRecommendationResponse(
+                    stock=_search_item_from_pack(pack, score=hot_score),
+                    action="积极买入",
+                    summary=str(quantified.get("summary") or "估值、成长和量价共振，可按纪律分批参与。"),
+                    reason=" · ".join(part for part in reason_parts if part),
+                    generated_at=_now_iso(),
+                )
+                _HOT_RECOMMENDATION_CACHE[cache_key] = (now, response)
+                return response
+    except FuturesTimeoutError:
+        logger.warning("[commercial-analysis] hot recommendation scan timed out after %.1fs", _HOT_RECOMMENDATION_SCAN_SECONDS)
+
+    response = _empty_hot_recommendation("无合适标的", "热榜候选暂未触发积极买入门槛")
+    _HOT_RECOMMENDATION_CACHE[cache_key] = (now, response)
+    return response
+
+
 @router.get(
     "/search",
     response_model=CommercialSearchResponse,
@@ -6768,6 +6930,18 @@ async def search_commercial_stocks(
     limit: int = Query(8, ge=1, le=12, description="最多返回条数"),
 ) -> CommercialSearchResponse:
     return await run_in_threadpool(_search_catalog, q, limit)
+
+
+@router.get(
+    "/hot-recommendation",
+    response_model=CommercialHotRecommendationResponse,
+    summary="首页今日热门推荐",
+    description="从实时热门候选中筛选量化动作等于积极买入的股票；没有合格标的时返回空结果。",
+)
+async def get_hot_recommendation(
+    limit: int = Query(18, ge=5, le=24, description="扫描热门候选数量"),
+) -> CommercialHotRecommendationResponse:
+    return await run_in_threadpool(_build_hot_recommendation, limit)
 
 
 @router.get(

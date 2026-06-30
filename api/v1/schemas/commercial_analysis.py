@@ -192,6 +192,17 @@ class CommercialSearchResponse(BaseModel):
     updated_at: str
 
 
+class CommercialHotRecommendationResponse(BaseModel):
+    """Homepage hot recommendation selected by realtime quant action gates."""
+
+    stock: Optional[CommercialSearchItem] = Field(None, description="符合积极买入门槛的今日热荐股票")
+    action: str = Field("待加载", description="量化动作：积极买入/无合适标的/待加载")
+    summary: str = Field("", description="一句话推荐摘要")
+    reason: str = Field("", description="量化筛选理由")
+    source: str = Field("hot-ranking + commercial-action-gate", description="推荐来源")
+    generated_at: str = Field(..., description="生成时间")
+
+
 class CommercialAnalysisResponse(BaseModel):
     """Public analysis page response."""
 

@@ -15,8 +15,6 @@ import {
   Target,
 } from 'lucide-react';
 import { commercialAnalysisApi } from '../api/commercialAnalysis';
-import { alphasiftApi, type AlphaSiftHotspotsResponse, type AlphaSiftHotspotStock } from '../api/alphasift';
-import { stocksApi, type HotStockItem } from '../api/stocks';
 import useStockIndex from '../hooks/useStockIndex';
 import type { CommercialSearchItem } from '../types/commercialAnalysis';
 import type { StockSuggestion as StockIndexSuggestion } from '../types/stockIndex';
@@ -185,19 +183,8 @@ const STOCKS: StockProfile[] = [
 
 const DEFAULT_STOCK = STOCKS[0];
 const EMPTY_SEARCH_LABEL = '输入股票名称或代码';
-const FALLBACK_HOT_SEARCH_POOL: SearchSuggestion[] = [
-  { name: 'TCL中环', code: '002129.SZ', market: 'A股', aliases: ['TCL中环', '002129', '002129.SZ'], hotReason: '市场关注度候选', hotScore: 82, isHotStock: true },
-  { name: '彤程新材', code: '603650.SH', market: 'A股', aliases: ['彤程新材', '603650', '603650.SH'], hotReason: '材料赛道关注度候选', hotScore: 80, isHotStock: true },
-  { name: '天岳先进', code: '688234.SH', market: 'A股', aliases: ['天岳先进', '688234', '688234.SH'], hotReason: '半导体材料关注度候选', hotScore: 78, isHotStock: true },
-  { name: '五一视界', code: 'HK6651', market: 'H股', aliases: ['五一视界', 'HK6651', '6651.HK'], hotReason: '物理AI关注度候选', hotScore: 76, isHotStock: true },
-];
 const MARKET_ONLY_QUERIES = new Set(['a', 'a股', 'h', 'h股', 'hk', 'sh', 'sz', 'cn', '沪', '深', '港股']);
 const STOCK_CODE_TARGET_RE = /^(?:HK\d{1,5}|\d{1,5}\.HK|\d{1,5}|\d{6}|(?:SH|SZ|BJ)\d{6}|\d{6}\.(?:SH|SZ|SS|BJ))$/i;
-
-function pickLocalHotSearchFallback(): SearchSuggestion {
-  const dayIndex = Math.floor(Date.now() / 86_400_000) % FALLBACK_HOT_SEARCH_POOL.length;
-  return FALLBACK_HOT_SEARCH_POOL[dayIndex];
-}
 
 function containsChineseText(value: string): boolean {
   return /[\u4e00-\u9fff]/.test(value);
@@ -366,187 +353,6 @@ function inferAStockExchange(code: string): string {
   return code;
 }
 
-function normalizeHotCandidateCode(value?: string): string {
-  const raw = (value || '').trim().toUpperCase();
-  if (!raw) return '';
-  if (/^\d{6}\.(?:SH|SZ|SS|BJ)$/.test(raw)) return raw.replace('.SS', '.SH');
-  const prefixedAShare = raw.match(/^(SH|SZ|BJ)(\d{6})$/);
-  if (prefixedAShare) return `${prefixedAShare[2]}.${prefixedAShare[1]}`;
-  if (/^\d{6}$/.test(raw)) return inferAStockExchange(raw);
-  return raw.replace(/\s+/g, '');
-}
-
-function inferMarketFromCode(code: string): SearchSuggestion['market'] {
-  const normalized = code.toUpperCase();
-  if (normalized.startsWith('HK') || normalized.endsWith('.HK') || /^\d{1,5}$/.test(normalized)) {
-    return 'H股';
-  }
-  return 'A股';
-}
-
-type HotCandidateRecord = {
-  item: SearchSuggestion;
-  score: number;
-  topicCount: number;
-  leaderCount: number;
-  reasons: Set<string>;
-};
-
-function formatHotChange(changePct?: number | null): string | null {
-  if (changePct === null || changePct === undefined || !Number.isFinite(changePct)) return null;
-  return `${changePct >= 0 ? '涨幅' : '跌幅'}${Math.abs(changePct).toFixed(1)}%`;
-}
-
-function upsertHotCandidate(
-  candidates: Map<string, HotCandidateRecord>,
-  item: SearchSuggestion,
-  score: number,
-  reasons: string[],
-  options: { isLeader?: boolean; isTopicMatch?: boolean } = {},
-): void {
-  const current = candidates.get(item.code);
-  if (!current) {
-    candidates.set(item.code, {
-      item: {
-        ...item,
-        isHotStock: true,
-      },
-      score,
-      topicCount: options.isTopicMatch ? 1 : 0,
-      leaderCount: options.isLeader ? 1 : 0,
-      reasons: new Set(reasons.filter(Boolean)),
-    });
-    return;
-  }
-
-  current.score += Math.max(score * 0.34, 6);
-  current.topicCount += options.isTopicMatch ? 1 : 0;
-  current.leaderCount += options.isLeader ? 1 : 0;
-  reasons.filter(Boolean).forEach((reason) => current.reasons.add(reason));
-  if (score > current.score * 0.72) {
-    current.item = { ...current.item, ...item, isHotStock: true };
-  }
-}
-
-function scoreRankingStock(stock: HotStockItem, index: number): number {
-  const rank = stock.rank ?? index + 1;
-  const rankScore = Math.max(0, 92 - (rank - 1) * 4.2);
-  const hotScore = stock.hotScore ?? 0;
-  const changePct = stock.changePercent ?? 0;
-  return hotScore * 1.15
-    + rankScore
-    + Math.max(0, changePct) * 2.4
-    - Math.max(0, -changePct) * 1.1;
-}
-
-function scoreHotCandidate(
-  stock: AlphaSiftHotspotStock,
-  hotspotScore: number,
-  hotspotTrendScore: number,
-  hotspotChangePct: number,
-  isLeader: boolean,
-): number {
-  const stockScore = stock.hotStockScore ?? 0;
-  const stockChangePct = stock.changePct ?? hotspotChangePct;
-  const amountScore = stock.amount && stock.amount > 0 ? Math.min(18, Math.log10(stock.amount + 1) * 1.8) : 0;
-  const turnoverScore = stock.turnoverRate && stock.turnoverRate > 0 ? Math.min(12, stock.turnoverRate * 1.2) : 0;
-  const volumeRatioScore = stock.volumeRatio && stock.volumeRatio > 0 ? Math.min(10, stock.volumeRatio * 2) : 0;
-
-  return stockScore * 1.2
-    + hotspotScore * 0.42
-    + hotspotTrendScore * 0.28
-    + Math.max(0, stockChangePct) * 2.1
-    - Math.max(0, -stockChangePct) * 1.0
-    + amountScore
-    + turnoverScore
-    + volumeRatioScore
-    + (isLeader ? 18 : 0);
-}
-
-function pickRecommendedHotStock(
-  response?: AlphaSiftHotspotsResponse | null,
-  hotRanking: HotStockItem[] = [],
-): SearchSuggestion | null {
-  const candidates = new Map<string, HotCandidateRecord>();
-  const details = response?.details || {};
-
-  hotRanking.forEach((stock, index) => {
-    const code = normalizeHotCandidateCode(stock.code);
-    const name = (stock.name || '').trim();
-    if (!code || !name || /^(?:指数|板块|概念)$/i.test(name)) return;
-    const reasonParts = [
-      stock.reason || '热度排名靠前',
-      formatHotChange(stock.changePercent),
-    ].filter(Boolean) as string[];
-
-    upsertHotCandidate(
-      candidates,
-      {
-        name,
-        code,
-        market: inferMarketFromCode(code),
-        aliases: [name, code, formatSearchDisplayCode(code)],
-      },
-      scoreRankingStock(stock, index),
-      reasonParts,
-      { isLeader: index < 3 },
-    );
-  });
-
-  (response?.hotspots || []).forEach((hotspot) => {
-    const detail = hotspot.topic ? details[hotspot.topic] : undefined;
-    const leaderStocks = detail?.leaderStocks || [];
-    const leaderCodes = new Set(leaderStocks.map((stock) => normalizeHotCandidateCode(stock.code)).filter(Boolean));
-    const hotStocks = [...leaderStocks, ...(detail?.stocks || [])];
-    const hotspotScore = hotspot.heatScore ?? 0;
-    const hotspotTrendScore = hotspot.trendScore ?? 0;
-    const hotspotChangePct = hotspot.changePct ?? 0;
-    const topicLabel = hotspot.name || hotspot.topic || detail?.canonicalTopic || '热点题材';
-
-    hotStocks.forEach((stock, index) => {
-      const code = normalizeHotCandidateCode(stock.code);
-      const name = (stock.name || '').trim();
-      if (!code || !name || /^(?:指数|板块|概念)$/i.test(name)) return;
-
-      const isLeader = leaderCodes.has(code) || /龙头|核心|领涨|leader/i.test(stock.role || '') || index === 0;
-      const score = scoreHotCandidate(stock, hotspotScore, hotspotTrendScore, hotspotChangePct, isLeader);
-      const changeText = formatHotChange(stock.changePct ?? hotspotChangePct);
-      upsertHotCandidate(
-        candidates,
-        {
-          name,
-          code,
-          market: inferMarketFromCode(code),
-          aliases: [name, code, formatSearchDisplayCode(code), topicLabel],
-        },
-        score,
-        [
-          isLeader ? '题材龙头' : `${topicLabel}活跃`,
-          changeText || '',
-          stock.amount ? '成交活跃' : '',
-        ],
-        { isLeader, isTopicMatch: true },
-      );
-    });
-  });
-
-  const best = Array.from(candidates.values())
-    .sort((a, b) => {
-      const aScore = a.score + a.topicCount * 9 + a.leaderCount * 12;
-      const bScore = b.score + b.topicCount * 9 + b.leaderCount * 12;
-      return bScore - aScore || a.item.code.localeCompare(b.item.code);
-    })[0];
-  if (!best) return null;
-
-  const reason = Array.from(best.reasons).slice(0, 3).join(' · ') || '市场热度靠前';
-  return {
-    ...best.item,
-    hotReason: reason,
-    hotScore: Math.round(Math.min(99, Math.max(1, best.score / 2))),
-    isHotStock: true,
-  };
-}
-
 function normalizeSearchTarget(value: string): string {
   return value.trim().replace(/\s+/g, '').toUpperCase();
 }
@@ -585,9 +391,10 @@ function formatPointPrice(value: string): string {
 const CommercialLandingPage: React.FC = () => {
   const navigate = useNavigate();
   const landingRef = useRef<HTMLElement | null>(null);
+  const hotRecommendationSeqRef = useRef(0);
   const { index: stockIndex } = useStockIndex();
   const previewStock = DEFAULT_STOCK;
-  const [recommendedSearchStock, setRecommendedSearchStock] = useState<SearchSuggestion | null>(() => pickLocalHotSearchFallback());
+  const [recommendedSearchStock, setRecommendedSearchStock] = useState<SearchSuggestion | null>(null);
   const [query, setQuery] = useState('');
   const [isSearchFocused, setIsSearchFocused] = useState(false);
   const [suggestions, setSuggestions] = useState<SearchSuggestion[]>([]);
@@ -637,53 +444,29 @@ const CommercialLandingPage: React.FC = () => {
 
   useEffect(() => {
     let cancelled = false;
-    let latestHotRanking: HotStockItem[] = [];
+    const sequence = hotRecommendationSeqRef.current + 1;
+    hotRecommendationSeqRef.current = sequence;
 
-    const applyRecommendation = (hotspots?: AlphaSiftHotspotsResponse | null) => {
-      if (cancelled) return;
-      const nextRecommendation = pickRecommendedHotStock(hotspots, latestHotRanking);
-      if (nextRecommendation) {
-        setRecommendedSearchStock(nextRecommendation);
-      }
-    };
-
-    stocksApi.getHotRanking(18, 6500)
+    commercialAnalysisApi.getHotRecommendation(18)
       .then((response) => {
-        if (cancelled) return;
-        latestHotRanking = response.stocks || [];
-        applyRecommendation();
+        if (cancelled || hotRecommendationSeqRef.current !== sequence) return;
+        if (response.action !== '积极买入' || !response.stock) {
+          setRecommendedSearchStock(null);
+          return;
+        }
+        setRecommendedSearchStock({
+          ...response.stock,
+          hotReason: response.reason || response.summary || '积极买入 · 今日热门推荐',
+          isHotStock: true,
+        });
       })
       .catch(() => {
-        // Keep the local high-quality fallback when realtime hot ranking is unavailable.
-      });
-
-    const rankingRefreshTimer = window.setTimeout(() => {
-      stocksApi.getHotRanking(18, 2500)
-        .then((response) => {
-          if (cancelled) return;
-          latestHotRanking = response.stocks || latestHotRanking;
-          applyRecommendation();
-        })
-        .catch(() => {
-          // The first recommendation is already visible; delayed refresh is best-effort.
-        });
-    }, 10_000);
-
-    alphasiftApi.getHotspots({ top: 24, refresh: false, includeDetails: true })
-      .then((response) => applyRecommendation(response))
-      .catch(() => {
-        // Cached hotspots are optional; the realtime refresh below can still update the recommendation.
-      });
-
-    alphasiftApi.getHotspots({ top: 24, refresh: true, includeDetails: true })
-      .then((response) => applyRecommendation(response))
-      .catch(() => {
-        // Keep the best available recommendation when live hotspot refresh is unavailable.
+        if (cancelled || hotRecommendationSeqRef.current !== sequence) return;
+        setRecommendedSearchStock(null);
       });
 
     return () => {
       cancelled = true;
-      window.clearTimeout(rankingRefreshTimer);
     };
   }, []);
 
@@ -852,9 +635,9 @@ const CommercialLandingPage: React.FC = () => {
                   <Search className="gyai-search-icon" aria-hidden="true" />
                   <label htmlFor="gyai-stock-search" className="sr-only">输入股票代码或公司名</label>
                   {showRecommendedHotHint ? (
-                    <span className="gyai-search-hot-badge" aria-label="今日热门股">
+                    <span className="gyai-search-hot-badge" aria-label="今日热门推荐">
                       <Flame aria-hidden="true" />
-                      今日热门股
+                      今日热门推荐
                     </span>
                   ) : null}
                   <input

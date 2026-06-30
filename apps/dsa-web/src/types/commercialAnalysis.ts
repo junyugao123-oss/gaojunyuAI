@@ -148,6 +148,15 @@ export type CommercialSearchResponse = {
   updatedAt: string;
 };
 
+export type CommercialHotRecommendationResponse = {
+  stock?: CommercialSearchItem | null;
+  action: string;
+  summary: string;
+  reason: string;
+  source: string;
+  generatedAt: string;
+};
+
 export type CommercialAnalysis = {
   stock: CommercialStockIdentity;
   recommendation: CommercialAiRecommendation;
