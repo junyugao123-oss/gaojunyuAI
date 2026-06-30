@@ -450,13 +450,13 @@ const CommercialLandingPage: React.FC = () => {
     commercialAnalysisApi.getHotRecommendation(18)
       .then((response) => {
         if (cancelled || hotRecommendationSeqRef.current !== sequence) return;
-        if (response.action !== '积极买入' || !response.stock) {
+        if (!response.stock || response.action === '待加载' || response.action === '无合适标的') {
           setRecommendedSearchStock(null);
           return;
         }
         setRecommendedSearchStock({
           ...response.stock,
-          hotReason: response.reason || response.summary || '积极买入 · 今日热门推荐',
+          hotReason: response.reason || response.summary || `${response.action} · 今日热门推荐`,
           isHotStock: true,
         });
       })

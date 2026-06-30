@@ -6839,6 +6839,60 @@ def _empty_hot_recommendation(action: str, reason: str) -> CommercialHotRecommen
     )
 
 
+def _score_hot_recommendation_candidate(
+    index: int,
+    candidate: Dict[str, Any],
+    pack: Dict[str, Any],
+    quantified: Dict[str, Any],
+) -> Optional[float]:
+    """Score homepage hot picks by market heat first, then quant quality.
+
+    The landing page is a discovery entrance, not a direct buy list. We therefore
+    prefer genuinely hot stocks, but still filter out stocks whose quant action
+    is too risky for a commercial homepage recommendation.
+    """
+
+    action = str(quantified.get("action") or "观察")
+    if action == "回避":
+        return None
+
+    inputs = _recommendation_quant_inputs(pack)
+    if inputs["is_st_stock"]:
+        return None
+
+    risk_score = _safe_float(quantified.get("risk_score")) or 50.0
+    opportunity_score = _safe_float(quantified.get("opportunity_score")) or 50.0
+    if risk_score >= 76:
+        return None
+    if action == "谨慎" and risk_score >= 64:
+        return None
+
+    hot_score = _safe_float(candidate.get("hot_score")) or max(1.0, 100.0 - index * 4.5)
+    rank_heat = max(0.0, 100.0 - (index - 1) * 4.5)
+    market_heat = max(hot_score, rank_heat)
+    action_bonus = {
+        "积极买入": 12.0,
+        "逢低关注": 8.0,
+        "观察": 2.0,
+        "谨慎": -8.0,
+    }.get(action, 0.0)
+
+    red_flag_penalty = min(16.0, len(inputs["red_flags"]) * 8.0)
+    volume_bonus = {"放量": 5.0, "正常": 2.0, "缩量": -3.0, "转弱": -6.0}.get(str(inputs["volume_state"]), 0.0)
+    trend_bonus = {"多头": 5.0, "修复": 3.0, "承压": -2.0, "转弱": -6.0}.get(str(inputs["trend_label"]), 0.0)
+
+    return round(
+        market_heat * 0.58
+        + opportunity_score * 0.20
+        + (100.0 - risk_score) * 0.16
+        + action_bonus
+        + volume_bonus
+        + trend_bonus
+        - red_flag_penalty,
+        2,
+    )
+
+
 def _evaluate_hot_recommendation_candidate(index: int, candidate: Dict[str, Any]) -> Optional[Dict[str, Any]]:
     raw_code = str(candidate.get("code") or "").strip()
     if not raw_code:
@@ -6848,13 +6902,15 @@ def _evaluate_hot_recommendation_candidate(index: int, candidate: Dict[str, Any]
     if not pack:
         return None
     quantified = _classify_recommendation_action(pack)
-    if quantified.get("action") != "积极买入":
+    recommendation_score = _score_hot_recommendation_candidate(index, candidate, pack, quantified)
+    if recommendation_score is None:
         return None
     return {
         "index": index,
         "candidate": candidate,
         "pack": pack,
         "quantified": quantified,
+        "recommendation_score": recommendation_score,
     }
 
 
@@ -6885,6 +6941,7 @@ def _build_hot_recommendation(limit: int) -> CommercialHotRecommendationResponse
         for index, candidate in enumerate(hot_stocks[:bounded_limit], start=1)
         if candidate.get("code")
     }
+    best_result: Optional[Dict[str, Any]] = None
     try:
         for future in as_completed(futures, timeout=_HOT_RECOMMENDATION_SCAN_SECONDS):
             index, candidate = futures[future]
@@ -6894,27 +6951,34 @@ def _build_hot_recommendation(limit: int) -> CommercialHotRecommendationResponse
                 logger.info("[commercial-analysis] skip hot candidate %s: %s", candidate.get("code"), exc)
                 continue
             if result:
-                pack = result["pack"]
-                quantified = result["quantified"]
-                hot_score = _safe_float(candidate.get("hot_score")) or max(1.0, 100.0 - index * 3.0)
-                reason_parts = [
-                    "积极买入",
-                    str(candidate.get("reason") or "").strip(),
-                    quantified.get("reason") or "",
-                ]
-                response = CommercialHotRecommendationResponse(
-                    stock=_search_item_from_pack(pack, score=hot_score),
-                    action="积极买入",
-                    summary=str(quantified.get("summary") or "估值、成长和量价共振，可按纪律分批参与。"),
-                    reason=" · ".join(part for part in reason_parts if part),
-                    generated_at=_now_iso(),
-                )
-                _HOT_RECOMMENDATION_CACHE[cache_key] = (now, response)
-                return response
+                if not best_result or result["recommendation_score"] > best_result["recommendation_score"]:
+                    best_result = result
     except FuturesTimeoutError:
         logger.warning("[commercial-analysis] hot recommendation scan timed out after %.1fs", _HOT_RECOMMENDATION_SCAN_SECONDS)
 
-    response = _empty_hot_recommendation("无合适标的", "热榜候选暂未触发积极买入门槛")
+    if best_result:
+        pack = best_result["pack"]
+        quantified = best_result["quantified"]
+        candidate = best_result["candidate"]
+        hot_score = _safe_float(candidate.get("hot_score")) or best_result["recommendation_score"]
+        action = str(quantified.get("action") or "观察")
+        reason_parts = [
+            "今日热门",
+            f"量化动作：{action}",
+            str(candidate.get("reason") or "").strip(),
+            quantified.get("reason") or "",
+        ]
+        response = CommercialHotRecommendationResponse(
+            stock=_search_item_from_pack(pack, score=hot_score),
+            action=action,
+            summary=str(quantified.get("summary") or "今日热度靠前，适合优先查看完整分析。"),
+            reason=" · ".join(part for part in reason_parts if part),
+            generated_at=_now_iso(),
+        )
+        _HOT_RECOMMENDATION_CACHE[cache_key] = (now, response)
+        return response
+
+    response = _empty_hot_recommendation("无合适标的", "热榜候选暂未通过风险过滤")
     _HOT_RECOMMENDATION_CACHE[cache_key] = (now, response)
     return response
 
@@ -6936,7 +7000,7 @@ async def search_commercial_stocks(
     "/hot-recommendation",
     response_model=CommercialHotRecommendationResponse,
     summary="首页今日热门推荐",
-    description="从实时热门候选中筛选量化动作等于积极买入的股票；没有合格标的时返回空结果。",
+    description="从实时热门候选中按市场热度优先、量化风险过滤筛选今日热荐股票；没有合格标的时返回空结果。",
 )
 async def get_hot_recommendation(
     limit: int = Query(18, ge=5, le=24, description="扫描热门候选数量"),
