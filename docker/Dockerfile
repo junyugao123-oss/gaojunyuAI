@@ -48,7 +48,10 @@ ENV PIP_INDEX_URL=https://pypi.tuna.tsinghua.edu.cn/simple
 ENV PIP_TRUSTED_HOST=pypi.tuna.tsinghua.edu.cn
 
 # 安装 Python 依赖
-RUN pip install --no-cache-dir -r requirements.txt
+# 使用 BuildKit pip 缓存，华为云长期更新时 requirements 未变会直接复用 Docker 层；
+# 即使依赖层需要重建，也会复用下载缓存，避免每次发布都重新拉完整依赖。
+RUN --mount=type=cache,target=/root/.cache/pip \
+    pip install -r requirements.txt
 
 # 复制应用代码
 COPY *.py ./
@@ -63,8 +66,9 @@ COPY docker/entrypoint.sh /usr/local/bin/docker-entrypoint.sh
 # AlphaSift is an optional screening engine. It is disabled by default and kept
 # out of the base image so production builds are not blocked by GitHub access.
 ARG INSTALL_ALPHASIFT=false
-RUN if [ "$INSTALL_ALPHASIFT" = "true" ]; then \
-      pip install --no-cache-dir -r requirements-alphasift.txt && \
+RUN --mount=type=cache,target=/root/.cache/pip \
+    if [ "$INSTALL_ALPHASIFT" = "true" ]; then \
+      pip install -r requirements-alphasift.txt && \
       python -c "import alphasift.dsa_adapter"; \
     else \
       echo "Skipping optional AlphaSift dependency"; \
