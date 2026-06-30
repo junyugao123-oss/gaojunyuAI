@@ -100,3 +100,43 @@ def test_platform_ai_cloud_leader_growth_is_supported_by_industry_profile():
     assert "AI算力与先进半导体" in labels
     assert "AI智能体与数字原生应用" in labels
     assert inputs["industry_space"] >= 0.74
+
+
+def test_moutai_basic_reason_keeps_baijiu_identity_when_weak_media_terms_appear():
+    stock = {"name": "贵州茅台", "code": "600519.SH", "market": "A股"}
+    profile = {
+        "business": "贵州茅台酒及系列酒生产销售，同时公开资料提到品牌授权、实景体验等延展场景。",
+        "products": ["贵州茅台酒", "茅台系列酒"],
+    }
+    sectors = [
+        {"name": "品牌授权", "relevance": "中", "reason": "弱相关延展词"},
+        {"name": "实景娱乐", "relevance": "中", "reason": "弱相关延展词"},
+    ]
+
+    assert ca._infer_company_business_category(profile, sectors, stock) == "baijiu"
+    reason = ca._company_basic_reason(stock, profile, sectors)
+
+    assert "高端白酒/食品饮料" in reason
+    assert "贵州茅台酒" in reason
+    assert "内容IP" not in reason
+    assert "影视娱乐" not in reason
+
+
+def test_verified_moutai_profile_overrides_bad_deepseek_company_position():
+    stock = {"name": "贵州茅台", "code": "600519.SH", "market": "A股"}
+    profile = ca._verified_company_profile("600519.SH", "贵州茅台")
+    parsed = {
+        "company_position": "贵州茅台属于内容IP、影视娱乐与文旅消费链条。",
+        "business_model": "依靠影视内容、票房和品牌授权赚钱。",
+        "industry_logic": "影视院线景气影响公司估值。",
+        "watch_points": "关注票房、剧集表现和IP授权。",
+        "risk_boundary": "若内容储备不足则基本面变弱。",
+    }
+
+    reason = ca._format_deepseek_company_basic(parsed, stock, profile, {}, [])
+
+    assert reason is not None
+    assert "高端白酒" in reason
+    assert "茅台酒" in reason
+    assert "内容IP" not in reason
+    assert "影视娱乐" not in reason

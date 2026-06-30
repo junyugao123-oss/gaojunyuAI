@@ -74,6 +74,27 @@ _COMPANY_PROFILE_CACHE: Dict[str, tuple[float, Dict[str, Any]]] = {}
 _COMPANY_PROFILE_CACHE_SECONDS = 3600
 
 _VERIFIED_COMPANY_PROFILES: Dict[str, Dict[str, Any]] = {
+    "600519.SH": {
+        "name": "贵州茅台",
+        "legal_name": "贵州茅台酒股份有限公司",
+        "stock_code": "600519.SH",
+        "verified_position": "中国高端白酒龙头企业，核心业务是贵州茅台酒及系列酒的生产与销售",
+        "business": "贵州茅台酒、系列酒及相关酒类产品的生产与销售",
+        "products": ["贵州茅台酒", "茅台系列酒"],
+        "industry": "高端白酒/食品饮料",
+        "business_model": "依托茅台品牌、稀缺产能、渠道体系和产品结构升级获取收入与利润，核心兑现来自茅台酒及系列酒销售",
+        "industry_logic": "高端白酒长期看品牌壁垒、商务消费、居民收入、渠道库存和批价稳定性，龙头现金流和分红能力通常更强",
+        "watch_points": "重点看批价、渠道库存、直销占比、收入增速、净利率、经营现金流、合同负债和分红稳定性",
+        "risk_boundary": "若批价持续下行、渠道库存恶化、消费需求走弱或收入利润增速明显放缓，估值支撑会减弱",
+        "source_name": "公司公开资料",
+        "source_url": "",
+        "status": "verified_company_profile",
+        "identity_locked": True,
+        "protected_terms": ["高端白酒", "贵州茅台酒", "系列酒"],
+    },
+    "SH600519": {
+        "alias_of": "600519.SH",
+    },
     "HK6651": {
         "name": "五一视界",
         "legal_name": "北京五一视界数字孪生科技股份有限公司",
@@ -96,6 +117,47 @@ _VERIFIED_COMPANY_PROFILES: Dict[str, Dict[str, Any]] = {
         "alias_of": "HK6651",
     },
 }
+
+_BAIJIU_IDENTITY_TERMS = (
+    "贵州茅台",
+    "茅台",
+    "五粮液",
+    "泸州老窖",
+    "山西汾酒",
+    "洋河股份",
+    "古井贡酒",
+    "今世缘",
+    "舍得酒业",
+    "酒鬼酒",
+    "水井坊",
+    "迎驾贡酒",
+    "口子窖",
+    "老白干酒",
+    "白酒",
+    "茅台酒",
+    "系列酒",
+    "高端白酒",
+    "酿酒",
+    "酒类",
+)
+
+_MEDIA_PRIMARY_TERMS = (
+    "影视娱乐",
+    "影视制作",
+    "影视院线",
+    "影视动漫制作",
+    "电影发行",
+    "电视剧制作",
+    "内容ip运营",
+    "院线",
+)
+
+_MEDIA_WEAK_TERMS = (
+    "品牌授权",
+    "实景娱乐",
+    "文旅",
+    "文旅演艺",
+)
 
 _POSITIVE_NEWS_KEYWORDS = (
     "增长",
@@ -1366,6 +1428,8 @@ def _verified_company_profile(code: str, stock_name: str = "") -> Optional[Dict[
     compact_name = _compact_query(stock_name)
     if compact_name in {"五一视界", "51world"}:
         keys.add("HK6651")
+    if compact_name in {"贵州茅台", "茅台"}:
+        keys.add("600519.SH")
 
     for key in keys:
         profile = _VERIFIED_COMPANY_PROFILES.get(key)
@@ -1497,6 +1561,7 @@ def _profile_theme_hint(profile: Dict[str, Any], sectors: List[Dict[str, str]]) 
     )
     compact = _compact_query(terms)
     hints: List[str] = []
+    is_baijiu = _has_any_term(compact, _BAIJIU_IDENTITY_TERMS)
     if any(keyword in compact for keyword in ("光刻胶", "cmp", "高纯溶剂", "电子专用材料", "半导体")):
         hints.append("半导体材料国产替代")
     if any(keyword in compact for keyword in ("橡胶", "助剂", "树脂")):
@@ -1507,7 +1572,8 @@ def _profile_theme_hint(profile: Dict[str, Any], sectors: List[Dict[str, str]]) 
         hints.append("物理AI与数字孪生落地")
     if any(keyword in compact for keyword in ("机器人", "无人驾驶", "智能驾驶")):
         hints.append("智能制造场景扩张")
-    if any(keyword in compact for keyword in ("影视", "电影", "娱乐", "传媒", "品牌授权", "实景娱乐", "文旅", "院线")):
+    media_hint_terms = ("影视", "电影", "娱乐", "传媒", "品牌授权", "实景娱乐", "文旅", "院线")
+    if not is_baijiu and any(keyword in compact for keyword in media_hint_terms):
         hints.append("内容IP、影视娱乐和文旅消费")
     return "、".join(hints[:2])
 
@@ -1548,7 +1614,12 @@ def _infer_company_business_category(
     primary = _profile_primary_terms(profile, sectors, stock)
     if not primary:
         return ""
-    if _has_any_term(primary, ("影视娱乐", "品牌授权", "实景娱乐", "影视院线", "影视动漫制作")):
+    if _has_any_term(primary, _BAIJIU_IDENTITY_TERMS):
+        return "baijiu"
+    if _has_any_term(primary, _MEDIA_PRIMARY_TERMS) or (
+        _has_any_term(primary, _MEDIA_WEAK_TERMS)
+        and _has_any_term(primary, ("影视", "电影", "传媒", "院线", "演艺", "娱乐内容"))
+    ):
         return "media_content"
     if _has_any_term(primary, ("tcl中环", "光伏硅片", "光伏组件", "光伏逆变器", "组串逆变器", "集中逆变器")):
         return "renewable_power"
@@ -1579,7 +1650,7 @@ def _infer_company_business_category(
         ("chemical_material", ("化工", "橡胶", "助剂", "树脂", "新材料", "材料")),
         # Keep media late and require stronger main-business evidence. A generic
         # "娱乐" in business scope must not override liquor, consumer or tourism.
-        ("media_content", ("影视", "电影", "电视剧", "传媒", "院线", "品牌授权", "实景娱乐", "文旅演艺")),
+        ("media_content", ("影视", "电影", "电视剧", "传媒", "院线", "文旅演艺")),
     ]
     for category, keywords in rules:
         if _has_any_term(primary, keywords):
