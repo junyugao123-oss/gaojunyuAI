@@ -1,3 +1,7 @@
+import json
+import tempfile
+from pathlib import Path
+
 from api.v1.endpoints import commercial_analysis as ca
 
 
@@ -140,3 +144,41 @@ def test_verified_moutai_profile_overrides_bad_deepseek_company_position():
     assert "茅台酒" in reason
     assert "内容IP" not in reason
     assert "影视娱乐" not in reason
+
+
+def test_commercial_search_uses_bundled_static_stock_index_in_container_layout():
+    original_repo_root = ca._repo_root
+    with tempfile.TemporaryDirectory() as temp_dir:
+        root = Path(temp_dir)
+        (root / "static").mkdir()
+        (root / "static" / "stocks.index.json").write_text(
+            json.dumps(
+                [
+                    [
+                        "600810.SH",
+                        "600810",
+                        "神马股份",
+                        "shenmagufen",
+                        "smgf",
+                        [],
+                        "CN",
+                        "stock",
+                        True,
+                        100,
+                    ],
+                ],
+                ensure_ascii=False,
+            ),
+            encoding="utf-8",
+        )
+
+        ca._repo_root = lambda: root
+        ca._load_stock_catalog.cache_clear()
+        try:
+            results = ca._search_catalog("神马", 5).model_dump()["results"]
+        finally:
+            ca._repo_root = original_repo_root
+            ca._load_stock_catalog.cache_clear()
+
+    assert results[0]["name"] == "神马股份"
+    assert results[0]["code"] == "600810.SH"

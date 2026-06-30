@@ -377,7 +377,13 @@ def _now_iso() -> str:
 
 @lru_cache(maxsize=1)
 def _load_stock_catalog() -> List[Dict[str, Any]]:
-    index_path = _repo_root() / "apps" / "dsa-web" / "public" / "stocks.index.json"
+    root = _repo_root()
+    candidate_paths = [
+        root / "apps" / "dsa-web" / "public" / "stocks.index.json",
+        root / "static" / "stocks.index.json",
+        root / "data" / "cache" / "stocks.index.json",
+    ]
+    index_path = next((path for path in candidate_paths if path.exists()), candidate_paths[0])
     try:
         raw_items = json.loads(index_path.read_text(encoding="utf-8"))
     except Exception as exc:  # noqa: BLE001 - search can fall back to curated items.
