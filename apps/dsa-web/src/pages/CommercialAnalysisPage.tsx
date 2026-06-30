@@ -312,6 +312,23 @@ function formatHeaderTitle(name: string | null | undefined, code: string): strin
   return `${cleanName} ${normalizedCode}`;
 }
 
+function formatChangePercent(value?: number | null): string | null {
+  if (typeof value !== 'number' || !Number.isFinite(value)) {
+    return '0.00%';
+  }
+
+  const sign = value > 0 ? '+' : '';
+  return `${sign}${value.toFixed(2)}%`;
+}
+
+function priceMoveTone(value?: number | null): 'up' | 'down' | 'flat' {
+  if (typeof value !== 'number' || !Number.isFinite(value) || value === 0) {
+    return 'flat';
+  }
+
+  return value > 0 ? 'up' : 'down';
+}
+
 const CommercialAnalysisPage: React.FC = () => {
   const { stockCode } = useParams();
   const navigate = useNavigate();
@@ -440,6 +457,8 @@ const CommercialAnalysisPage: React.FC = () => {
   const decisionEngineSteps = analysis
     ? buildDecisionEngineSteps(analysis, invalidPoint, confirmPoint)
     : [];
+  const currentPriceChangeText = analysis ? formatChangePercent(analysis.valuation.changePercent) : null;
+  const currentPriceMoveTone = analysis ? priceMoveTone(analysis.valuation.changePercent) : 'flat';
 
   return (
     <main className="gyai-analysis-page">
@@ -531,7 +550,10 @@ const CommercialAnalysisPage: React.FC = () => {
           <div className="gyaia-metric-strip" aria-label="核心行动指标">
             <div>
               <span>当前价</span>
-              <strong>{formatPrice(analysis.valuation.currentPrice)}</strong>
+              <strong className={`gyaia-price-stack gyaia-price-${currentPriceMoveTone}`}>
+                {currentPriceChangeText ? <small>{currentPriceChangeText}</small> : null}
+                <b>{formatPrice(analysis.valuation.currentPrice)}</b>
+              </strong>
               <em>{analysis.valuation.pricePosition}</em>
             </div>
             <div>

@@ -432,11 +432,48 @@ body:has(.gyai-analysis-page) {
 .gyaia-metric-strip strong {
   display: block;
   margin-top: 6px;
-  color: #c33829;
+  color: #b36f22;
   font-size: 21px;
   font-weight: 760;
   line-height: 1;
   white-space: nowrap;
+}
+
+.gyaia-metric-strip strong.gyaia-price-stack {
+  display: flex;
+  flex-direction: column;
+  align-items: flex-start;
+  gap: 3px;
+  line-height: 1.04;
+}
+
+.gyaia-price-stack small,
+.gyaia-price-stack b {
+  display: block;
+  font: inherit;
+  line-height: 1.04;
+}
+
+.gyaia-price-stack small {
+  font-size: 14px;
+  font-weight: 760;
+}
+
+.gyaia-price-stack b {
+  font-size: 21px;
+  font-weight: 760;
+}
+
+.gyaia-price-up {
+  color: #d9352a !important;
+}
+
+.gyaia-price-down {
+  color: #2f9e44 !important;
+}
+
+.gyaia-price-flat {
+  color: #2d2924 !important;
 }
 
 .gyaia-metric-strip em {

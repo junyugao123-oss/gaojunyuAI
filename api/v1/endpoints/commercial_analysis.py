@@ -5521,6 +5521,8 @@ def _merge_live_market_data(pack: Dict[str, Any], market_data: Dict[str, Any]) -
         stock["currency"] = "HKD" if quote["currency"] == "HKD" else stock.get("currency", quote["currency"])
     valuation = pack["valuation"]
     valuation.update(_derive_dynamic_valuation(float(current_price), history, stock["market"]))
+    if quote.get("change_percent") is not None:
+        valuation["change_percent"] = _market_price_round(float(quote["change_percent"]))
     if quote.get("market_cap"):
         valuation["market_cap"] = _market_price_round(float(quote["market_cap"]))
 
@@ -5579,6 +5581,8 @@ def _generic_pack(code: str, market_data: Optional[Dict[str, Any]] = None) -> Di
     stock_name = (identity or {}).get("name") or quote_name
     history = (market_data or {}).get("history") or []
     valuation = _derive_dynamic_valuation(float(current_price), history, market)
+    if isinstance(quote, dict) and quote.get("change_percent") is not None:
+        valuation["change_percent"] = _market_price_round(float(quote["change_percent"]))
     if isinstance(quote, dict) and quote.get("market_cap"):
         valuation["market_cap"] = _market_price_round(float(quote["market_cap"]))
     quant_metrics = _build_live_quant_metrics(float(current_price), history)
