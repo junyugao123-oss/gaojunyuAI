@@ -108,5 +108,35 @@ if "白酒" not in text and "茅台酒" not in text:
     raise SystemExit("public API did not return baijiu identity")
 '
 
+log "Verifying stock search index"
+curl -fsS "http://127.0.0.1:${API_PORT}/api/v1/commercial-analysis/search?q=%E7%A5%9E%E9%A9%AC&limit=5" \
+  | python3 -c '
+import json
+import sys
+
+payload = json.load(sys.stdin)
+results = payload.get("results") or []
+summary = [(item.get("name"), item.get("code"), item.get("market")) for item in results]
+print(summary)
+if not any(item.get("name") in {"神马股份", "神马电力"} for item in results):
+    raise SystemExit("stock search index did not return expected 神马 results")
+'
+
+log "Verifying industry trend generation"
+curl -fsS "http://127.0.0.1:${API_PORT}/api/v1/commercial-analysis/HK6651" \
+  | python3 -c '
+import json
+import sys
+
+payload = json.load(sys.stdin)
+trend = payload.get("industry_trend") or {}
+items = trend.get("items") or []
+print("industry_trend=", trend.get("status"), trend.get("theme"), [(i.get("label"), i.get("impact_score")) for i in items])
+if trend.get("status") == "pending" or trend.get("summary") == "待读取":
+    raise SystemExit("industry trend is still pending")
+if not items or all(item.get("label") == "待读取" for item in items):
+    raise SystemExit("industry trend items are not generated")
+'
+
 log "Deployment completed"
 docker compose -f "$COMPOSE_FILE" ps
