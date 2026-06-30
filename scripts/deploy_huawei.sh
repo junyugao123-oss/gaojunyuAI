@@ -9,6 +9,9 @@ BRANCH="${DEPLOY_BRANCH:-main}"
 COMPOSE_FILE="${COMPOSE_FILE:-docker/docker-compose.yml}"
 SERVICES="${DEPLOY_SERVICES:-server analyzer}"
 API_PORT="${API_PORT:-8000}"
+GIT_FETCH_RETRIES="${GIT_FETCH_RETRIES:-5}"
+GIT_FETCH_TIMEOUT="${GIT_FETCH_TIMEOUT:-180}"
+GIT_FETCH_DEPTH="${GIT_FETCH_DEPTH:-1}"
 
 export DOCKER_BUILDKIT="${DOCKER_BUILDKIT:-1}"
 export COMPOSE_DOCKER_CLI_BUILD="${COMPOSE_DOCKER_CLI_BUILD:-1}"
@@ -17,13 +20,28 @@ log() {
   printf '\n==> %s\n' "$*"
 }
 
+fetch_latest() {
+  local attempt
+  for attempt in $(seq 1 "$GIT_FETCH_RETRIES"); do
+    printf 'git fetch attempt %s/%s...\n' "$attempt" "$GIT_FETCH_RETRIES"
+    if timeout "$GIT_FETCH_TIMEOUT" \
+      git fetch --prune --depth="$GIT_FETCH_DEPTH" "$REMOTE" "$BRANCH"; then
+      return 0
+    fi
+    if [ "$attempt" -lt "$GIT_FETCH_RETRIES" ]; then
+      sleep $((attempt * 3))
+    fi
+  done
+  return 1
+}
+
 log "Preparing git network settings"
 git config --global http.version HTTP/1.1 || true
 git config --global http.lowSpeedLimit 1000 || true
 git config --global http.lowSpeedTime 60 || true
 
 log "Pulling latest ${REMOTE}/${BRANCH}"
-git fetch "$REMOTE" "$BRANCH"
+fetch_latest
 git reset --hard "$REMOTE/$BRANCH"
 CURRENT_HEAD="$(git rev-parse --short HEAD)"
 printf 'Current HEAD: %s\n' "$CURRENT_HEAD"
