@@ -19,10 +19,6 @@ FROM python:3.11-slim-bookworm
 # 设置工作目录
 WORKDIR /app
 
-# 华为云国内节点构建镜像时访问默认 PyPI 较慢，使用国内镜像提升长期部署稳定性。
-ENV PIP_INDEX_URL=https://pypi.tuna.tsinghua.edu.cn/simple
-ENV PIP_TRUSTED_HOST=pypi.tuna.tsinghua.edu.cn
-
 # 设置时区为上海
 ENV TZ=Asia/Shanghai
 RUN ln -snf /usr/share/zoneinfo/$TZ /etc/localtime && echo $TZ > /etc/timezone
@@ -46,6 +42,10 @@ RUN groupadd -g 1000 dsa && \
 
 # 复制依赖文件
 COPY requirements.txt requirements-alphasift.txt .
+
+# 华为云国内节点构建镜像时访问默认 PyPI 较慢，使用国内镜像提升长期部署稳定性。
+ENV PIP_INDEX_URL=https://pypi.tuna.tsinghua.edu.cn/simple
+ENV PIP_TRUSTED_HOST=pypi.tuna.tsinghua.edu.cn
 
 # 安装 Python 依赖
 RUN pip install --no-cache-dir -r requirements.txt
