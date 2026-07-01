@@ -15,6 +15,7 @@ import {
   Target,
 } from 'lucide-react';
 import { commercialAnalysisApi } from '../api/commercialAnalysis';
+import { stocksApi } from '../api/stocks';
 import useStockIndex from '../hooks/useStockIndex';
 import type { CommercialSearchItem } from '../types/commercialAnalysis';
 import type { StockSuggestion as StockIndexSuggestion } from '../types/stockIndex';
@@ -25,7 +26,6 @@ import './CommercialLandingPage.css';
 const LANDING_COPY_VERSION = 'example-preview-20260625';
 const SEARCH_DEBOUNCE_MS = 180;
 const SEARCH_RESULT_LIMIT = 8;
-const HOT_RECOMMENDATION_LOADING_LABEL = '正在筛选今日热门股';
 
 type StockProfile = {
   name: string;
@@ -348,6 +348,11 @@ function getSearchStockLabel(stock: Pick<SearchSuggestion, 'name' | 'code'>): st
   return `${stock.name} ${formatSearchDisplayCode(stock.code)}`;
 }
 
+function inferHotStockMarket(code: string): SearchSuggestion['market'] {
+  const normalized = code.trim().toUpperCase();
+  return normalized.startsWith('HK') || normalized.endsWith('.HK') ? 'H股' : 'A股';
+}
+
 function inferAStockExchange(code: string): string {
   if (/^[036]/.test(code)) return code.startsWith('6') ? `${code}.SH` : `${code}.SZ`;
   if (/^[48]/.test(code)) return `${code}.BJ`;
@@ -396,7 +401,6 @@ const CommercialLandingPage: React.FC = () => {
   const { index: stockIndex } = useStockIndex();
   const previewStock = DEFAULT_STOCK;
   const [recommendedSearchStock, setRecommendedSearchStock] = useState<SearchSuggestion | null>(null);
-  const [isHotRecommendationLoading, setIsHotRecommendationLoading] = useState(true);
   const [query, setQuery] = useState('');
   const [suggestions, setSuggestions] = useState<SearchSuggestion[]>([]);
   const [suggestionsOpen, setSuggestionsOpen] = useState(false);
@@ -406,10 +410,8 @@ const CommercialLandingPage: React.FC = () => {
 
   const recommendedSearchLabel = recommendedSearchStock
     ? getSearchStockLabel(recommendedSearchStock)
-    : isHotRecommendationLoading
-      ? HOT_RECOMMENDATION_LOADING_LABEL
-      : EMPTY_SEARCH_LABEL;
-  const showRecommendedHotHint = Boolean((recommendedSearchStock || isHotRecommendationLoading) && !query.trim());
+    : EMPTY_SEARCH_LABEL;
+  const showRecommendedHotHint = Boolean(recommendedSearchStock && !query.trim());
 
   useEffect(() => {
     const normalized = normalizeQuery(query);
@@ -450,23 +452,27 @@ const CommercialLandingPage: React.FC = () => {
     const sequence = hotRecommendationSeqRef.current + 1;
     hotRecommendationSeqRef.current = sequence;
 
-    commercialAnalysisApi.getHotRecommendation(18)
+    stocksApi.getHotRanking(18, 12000)
       .then((response) => {
         if (cancelled || hotRecommendationSeqRef.current !== sequence) return;
-        setIsHotRecommendationLoading(false);
-        if (!response.stock || response.action === '待加载' || response.action === '无合适标的') {
+        const [hotStock] = response.stocks;
+        if (!hotStock) {
           setRecommendedSearchStock(null);
           return;
         }
         setRecommendedSearchStock({
-          ...response.stock,
-          hotReason: response.reason || response.summary || `${response.action} · 今日热门推荐`,
+          name: hotStock.name,
+          code: hotStock.code,
+          market: inferHotStockMarket(hotStock.code),
+          aliases: [hotStock.name, hotStock.code],
+          score: hotStock.hotScore ?? undefined,
+          hotScore: hotStock.hotScore ?? undefined,
+          hotReason: hotStock.reason || '今日热度榜推荐',
           isHotStock: true,
         });
       })
       .catch(() => {
         if (cancelled || hotRecommendationSeqRef.current !== sequence) return;
-        setIsHotRecommendationLoading(false);
         setRecommendedSearchStock(null);
       });
 
