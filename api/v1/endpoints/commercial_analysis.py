@@ -2827,10 +2827,17 @@ def _build_trend_action_reason(
     low = _safe_float(valuation.get("low"))
     high = _safe_float(valuation.get("high"))
     price_position = str(valuation.get("price_position") or "待读取")
-    prefix = f"20日{momentum_20_text}、60日{momentum_60_text}、量价{volume_ratio_text}"
-    if ma_state and ma_state != "待读取":
-        prefix += f"、均线{ma_state}"
-    prefix += "。"
+    missing_quant = not any(value != "待读取" for value in [momentum_20_text, momentum_60_text, volume_ratio_text, ma_state])
+    if missing_quant:
+        prefix = "短周期量化数据不足，先按估值区间、点位纪律和基本面证据处理。"
+    else:
+        momentum_20_label = momentum_20_text if momentum_20_text != "待读取" else "数据不足"
+        momentum_60_label = momentum_60_text if momentum_60_text != "待读取" else "数据不足"
+        volume_ratio_label = volume_ratio_text if volume_ratio_text != "待读取" else "数据不足"
+        prefix = f"20日{momentum_20_label}、60日{momentum_60_label}、量价{volume_ratio_label}"
+        if ma_state and ma_state != "待读取":
+            prefix += f"、均线{ma_state}"
+        prefix += "。"
 
     strong_short = momentum_20 is not None and momentum_20 >= 18
     strong_mid = momentum_60 is not None and momentum_60 >= 25
@@ -2879,7 +2886,7 @@ def _valuation_unit(valuation: Dict[str, Any]) -> str:
 
 def _format_reason_price(value: Optional[float], unit: str) -> str:
     if value is None:
-        return "待读取"
+        return "纪律位未形成"
     return f"{value:.3f}{unit}"
 
 
@@ -2907,6 +2914,8 @@ def _build_recommendation_reason(
     invalid_text = _sniper_price_text(sniper_points, "失效位", unit)
     volume_state = (_metric_by_label(quant_metrics, "量价确认") or {}).get("percentile", "待读取")
     ma_state = (_metric_by_label(quant_metrics, "均线结构") or {}).get("value", "待读取")
+    volume_label = volume_state if volume_state != "待读取" else "数据不足"
+    ma_label = ma_state if ma_state != "待读取" else "数据不足"
 
     if high is not None and current_price > high:
         return (
@@ -2917,13 +2926,13 @@ def _build_recommendation_reason(
     if low is not None and current_price < low:
         return (
             f"当前属于低估候选：当前价{current_price:.3f}{unit}低于动态估值下沿{low:.3f}{unit}，"
-            f"有赔率但不能只因便宜就出手。先等价格止跌、量价状态从{volume_state}转为确认，"
+            f"有赔率但不能只因便宜就出手。先等价格止跌、量价状态从{volume_label}转为确认，"
             f"再看能否站上确认位{confirm_text}。"
         )
     return (
         f"当前建议以观察和确认位为主：当前价{current_price:.3f}{unit}，{price_position}，"
         f"估值没有明显失控。先看失效位{invalid_text}是否守住，再看确认位{confirm_text}能否放量突破；"
-        f"均线结构为{ma_state}时，不宜提前重仓押方向。"
+        f"均线结构为{ma_label}时，不宜提前重仓押方向。"
     )
 
 
@@ -2933,7 +2942,7 @@ def _build_valuation_reason(current_price: float, valuation: Dict[str, Any]) -> 
     high = _safe_float(valuation.get("high"))
     price_position = str(valuation.get("price_position") or "待读取")
     if low is None or high is None:
-        return "动态估值区间待读取，强结论会自动降级。"
+        return "动态估值区间数据不足，强结论会自动降级。"
     if current_price > high:
         advice = "当前更像在交易预期溢价，后续必须用业绩、订单或趋势强度继续消化。"
     elif current_price < low:
@@ -2953,7 +2962,7 @@ def _build_sniper_reason(sniper_points: List[Dict[str, Any]], valuation: Dict[st
     focus_desc = (
         str(focus.get("description") or "先等价格回到更舒服的位置").rstrip("，。、；; ")
         if focus
-        else "待读取"
+        else "先等价格回到更舒服的位置"
     )
     confirm_text = _sniper_price_text(sniper_points, "确认位", unit)
     invalid_text = _sniper_price_text(sniper_points, "失效位", unit)
@@ -2972,11 +2981,12 @@ def _build_trend_risk_reason(
 ) -> str:
     trend_text = _build_trend_action_reason(current_price, valuation, quant_metrics)
     volatility = (_metric_by_label(quant_metrics, "年化波动率") or {}).get("value", "待读取")
+    volatility_label = volatility if volatility != "待读取" else "波动率数据不足"
     first_sector = next((item for item in sectors if item.get("name") and item.get("name") != "待读取"), None)
     sector_text = (
         f"{first_sector.get('name')} {first_sector.get('realtime_change') or first_sector.get('heat')}"
         if first_sector
-        else "板块待读取"
+        else "板块数据不足，本轮不作为加分项"
     )
     news_counts = _news_signal_counts(news)
     news_text = (
@@ -2985,7 +2995,7 @@ def _build_trend_risk_reason(
         else "资讯持续更新"
     )
     return _short_text(
-        f"{trend_text} 同时看风险边界：年化波动率{volatility}，关联板块{sector_text}，最新资讯{news_text}。",
+        f"{trend_text} 同时看风险边界：年化波动率{volatility_label}，关联板块{sector_text}，最新资讯{news_text}。",
         238,
     )
 
@@ -3311,6 +3321,31 @@ _SEVERE_DISTRESS_TERMS = (
     "重整失败",
 )
 
+_BENIGN_CLEARING_TERMS = (
+    "资金清算",
+    "代理资金清算",
+    "证券资金清算",
+    "清算行",
+    "清算业务",
+    "清算服务",
+    "支付清算",
+    "结算清算",
+    "资金结算",
+)
+
+_DISTRESS_CLEARING_CONTEXT_TERMS = (
+    "破产清算",
+    "强制清算",
+    "司法清算",
+    "进入清算",
+    "申请清算",
+    "清算申请",
+    "清算呈请",
+    "清盘清算",
+    "清算组",
+    "退市清算",
+)
+
 _LIQUIDITY_DISTRESS_TERMS = (
     "债务重组",
     "债务逾期",
@@ -3368,10 +3403,30 @@ def _has_severe_distress_context(compact_text: str) -> bool:
     severe_terms = [
         _compact_query(term)
         for term in _SEVERE_DISTRESS_TERMS
-        if _compact_query(term) and _compact_query(term) != _compact_query("停牌")
+        if _compact_query(term) and _compact_query(term) not in {_compact_query("停牌"), _compact_query("清算")}
     ]
     if any(term in compact_text for term in severe_terms):
         return True
+    clearing = _compact_query("清算")
+    if clearing in compact_text:
+        benign_clearing = any(_compact_query(term) in compact_text for term in _BENIGN_CLEARING_TERMS)
+        distress_clearing = any(_compact_query(term) in compact_text for term in _DISTRESS_CLEARING_CONTEXT_TERMS)
+        if distress_clearing:
+            return True
+        if not benign_clearing:
+            clearing_risk_context = (
+                "破产",
+                "退市",
+                "终止上市",
+                "债务违约",
+                "无法偿还",
+                "资不抵债",
+                "法院",
+                "呈请",
+                "清盘",
+            )
+            if any(_compact_query(term) in compact_text for term in clearing_risk_context):
+                return True
     suspension = _compact_query("停牌")
     if suspension not in compact_text:
         return False
@@ -5252,17 +5307,28 @@ def _build_investment_hypotheses(pack: Dict[str, Any]) -> List[Dict[str, str]]:
                 f"资讯情绪：利好{news_counts['positive']}条、利空{news_counts['risk']}条、中性{news_counts['neutral']}条；"
                 f"板块平均变化{sector_change:+.2f}%。"
                 if sector_change is not None
-                else f"资讯情绪：利好{news_counts['positive']}条、利空{news_counts['risk']}条、中性{news_counts['neutral']}条；板块待读取。"
+                else (
+                    f"资讯情绪：利好{news_counts['positive']}条、利空{news_counts['risk']}条、中性{news_counts['neutral']}条；"
+                    "板块数据不足，本轮不作为加分项。"
+                )
             ),
             "check_next": "继续跟踪最新公告、行业催化和相关板块涨跌是否同向。",
             "invalidated_by": "出现连续利空资讯，或核心相关板块明显跑输。",
         },
         {
             "title": "风险纪律假设",
-            "status": "观察中" if invalid_text != "待读取" else "待读取",
-            "evidence": f"当前失效位设为{invalid_text}，用于控制短线承接失败风险。",
+            "status": "观察中",
+            "evidence": (
+                f"当前失效位设为{invalid_text}，用于控制短线承接失败风险。"
+                if invalid_text != "待读取"
+                else "短线纪律位尚未稳定形成，本轮以轻仓观察和重新评估为主。"
+            ),
             "check_next": "优先观察失效位是否被有效跌破，再决定是否降级。",
-            "invalidated_by": f"跌破{invalid_text}后无法快速收复，先降低关注优先级。" if invalid_text != "待读取" else "待读取",
+            "invalidated_by": (
+                f"跌破{invalid_text}后无法快速收复，先降低关注优先级。"
+                if invalid_text != "待读取"
+                else "失效位尚未形成时，以仓位控制和重新评估为主。"
+            ),
         },
     ]
 
@@ -5462,13 +5528,31 @@ def _derive_sniper_points(
     if focus_high <= focus_low:
         focus_low = min(current_price, focus_low)
         focus_high = max(current_price + atr_price * 0.8, focus_low * 1.018)
-    confirm = max(
+    raw_confirm = max(
         valuation_low * 1.02,
         current_price + atr_price * 1.8,
         ma20 * 1.01 if ma20 else 0,
         ma60 * 1.04 if ma60 else 0,
         min(swing_high, valuation_high * 1.02, stable_anchor * 1.18),
     )
+    valuation_distance = valuation_low / current_price if current_price > 0 else 1.0
+    needs_stage_confirm = (
+        raw_confirm > current_price * 1.55
+        or valuation_distance > 1.35
+        or bool(volatility and volatility >= 120)
+    )
+    if needs_stage_confirm:
+        if volatility and volatility >= 120:
+            confirm_cap_ratio = 1.24
+        elif valuation_distance > 1.8:
+            confirm_cap_ratio = 1.28
+        else:
+            confirm_cap_ratio = 1.38
+        stage_cap = current_price * confirm_cap_ratio
+        confirm = min(raw_confirm, stage_cap)
+        confirm = max(confirm, current_price * 1.018)
+    else:
+        confirm = raw_confirm
     if volatility and volatility >= 80:
         invalid_buffer = 1.9
     elif volatility and volatility >= 45:
@@ -5869,6 +5953,29 @@ def _classify_recommendation_action(pack: Dict[str, Any]) -> Dict[str, Any]:
         and news_not_overwhelming
     )
     value_anchor_ok = inputs["value_for_money_score"] >= 6.2 or inputs["value_score"] >= 6.5
+    bluechip_value_active = (
+        opportunity_score >= 66.0
+        and risk_score <= 31.5
+        and relative_position <= 0.45
+        and current_price <= valuation_high
+        and inputs["value_for_money_score"] >= 7.4
+        and inputs["value_score"] >= 5.8
+        and inputs["growth_score"] >= 5.4
+        and inputs["profitability_score"] >= 6.0
+        and inputs["finance_score"] >= 5.8
+        and quality_floor_ok
+    )
+    growth_quality_active = (
+        opportunity_score >= 65.5
+        and risk_score <= 33
+        and relative_position <= 0.46
+        and current_price <= valuation_high
+        and inputs["growth_score"] >= 7.1
+        and inputs["value_for_money_score"] >= 6.2
+        and inputs["profitability_score"] >= 5.2
+        and inputs["finance_score"] >= 5.2
+        and quality_floor_ok
+    )
     low_position_absorption = (
         trend_label == "承压"
         and volume_confirmed
@@ -5900,12 +6007,20 @@ def _classify_recommendation_action(pack: Dict[str, Any]) -> Dict[str, Any]:
         and volatility_ok
         and news_not_overwhelming
     )
-    if low_value_active or growth_momentum_active:
+    if bluechip_value_active or growth_quality_active or low_value_active or growth_momentum_active:
         action = "积极买入"
         summary = (
+            "低风险高赔率，可按纪律分批参与。"
+            if bluechip_value_active
+            else (
+                "成长质量突出，估值仍可承接，可分批参与。"
+                if growth_quality_active
+                else (
             "低位赔率较高，可分批积极参与。"
             if low_position_absorption and not trend_confirmed
             else "估值、成长和量价共振，可按纪律分批参与。"
+                )
+            )
         )
     elif risk_score >= 74 or (inputs["is_st_stock"] and (risk_score >= 58 or current_price > valuation_high)):
         action = "回避"
@@ -5967,10 +6082,14 @@ def _active_buy_gate(pack: Dict[str, Any]) -> Dict[str, Any]:
         (not is_st_stock, "ST股票不触发积极买入"),
         (not red_flags, "财务红旗：" + "、".join(red_flags[:3])),
         (current_price <= valuation_high and relative_position <= 0.85, "价格接近或高于估值上沿"),
-        (growth_score >= 6.4, "成长分不足6.4"),
+        (
+            growth_score >= 6.4
+            or (growth_score >= 5.0 and value_for_money_score >= 7.0 and relative_position <= 0.42),
+            "成长分或低估赔率不足",
+        ),
         (value_for_money_score >= 5.6 or value_score >= 5.8, "估值赔率不足"),
         (profitability_score >= 4.8 and finance_score >= 4.8, "盈利或财务质量不足"),
-        (trend_label in {"多头", "修复"} or relative_position <= 0.32, "均线结构未进入多头/修复"),
+        (trend_label in {"多头", "修复"} or relative_position <= 0.42, "均线结构未进入多头/修复"),
         (volume_state in {"放量", "正常"}, "量价状态未验证"),
         ((volatility is None) or volatility <= 125, "波动率过高"),
         (news_counts["risk"] <= max(1, news_counts["positive"] + news_counts["neutral"]), "利空资讯过多"),
@@ -5993,9 +6112,13 @@ def _active_buy_gate(pack: Dict[str, Any]) -> Dict[str, Any]:
         + (0.55 if volume_state == "放量" else 0.25)
         + min(0.35, news_counts["positive"] * 0.08)
     )
+    if value_for_money_score >= 7.0 and relative_position <= 0.42 and profitability_score >= 5.5 and finance_score >= 5.8:
+        conviction += 0.18
+    if growth_score >= 7.1 and relative_position <= 0.46 and value_for_money_score >= 6.2:
+        conviction += 0.16
     return {
-        "allowed": conviction >= 6.55,
-        "reason": "成长、估值、趋势和财务同时过线" if conviction >= 6.55 else "综合置信度不足",
+        "allowed": conviction >= 6.48,
+        "reason": "成长、估值、趋势和财务同时过线" if conviction >= 6.48 else "综合置信度不足",
         "conviction": round(conviction, 2),
         "relative_position": round(relative_position, 3),
     }
@@ -6871,9 +6994,17 @@ def _score_hot_recommendation_candidate(
     if action == "谨慎" and risk_score >= 64:
         return None
 
-    hot_score = _safe_float(candidate.get("hot_score")) or max(1.0, 100.0 - index * 4.5)
-    rank_heat = max(0.0, 100.0 - (index - 1) * 4.5)
+    raw_change_percent = candidate.get("change_percent")
+    if raw_change_percent is None:
+        raw_change_percent = candidate.get("change_pct")
+    change_percent = _safe_float(raw_change_percent)
+    if change_percent is None or change_percent < 1.0:
+        return None
+
+    hot_score = _safe_float(candidate.get("hot_score")) or max(1.0, 70.0 - index * 2.5)
+    rank_heat = max(0.0, 70.0 - (index - 1) * 2.5)
     market_heat = max(hot_score, rank_heat)
+    intraday_gain_heat = max(0.0, min(100.0, change_percent * 10.0))
     action_bonus = {
         "积极买入": 12.0,
         "逢低关注": 8.0,
@@ -6886,9 +7017,10 @@ def _score_hot_recommendation_candidate(
     trend_bonus = {"多头": 5.0, "修复": 3.0, "承压": -2.0, "转弱": -6.0}.get(str(inputs["trend_label"]), 0.0)
 
     return round(
-        market_heat * 0.58
-        + opportunity_score * 0.20
-        + (100.0 - risk_score) * 0.16
+        market_heat * 0.45
+        + intraday_gain_heat * 0.34
+        + opportunity_score * 0.10
+        + (100.0 - risk_score) * 0.08
         + action_bonus
         + volume_bonus
         + trend_bonus
@@ -6966,8 +7098,9 @@ def _build_hot_recommendation(limit: int) -> CommercialHotRecommendationResponse
         candidate = best_result["candidate"]
         hot_score = _safe_float(candidate.get("hot_score")) or best_result["recommendation_score"]
         action = str(quantified.get("action") or "观察")
+        candidate_change = _safe_float(candidate.get("change_percent") if candidate.get("change_percent") is not None else candidate.get("change_pct"))
         reason_parts = [
-            "今日热门",
+            f"今日涨幅活跃{candidate_change:+.2f}%" if candidate_change is not None else "今日热门活跃",
             f"量化动作：{action}",
             str(candidate.get("reason") or "").strip(),
             quantified.get("reason") or "",
@@ -6977,6 +7110,41 @@ def _build_hot_recommendation(limit: int) -> CommercialHotRecommendationResponse
             action=action,
             summary=str(quantified.get("summary") or "今日热度靠前，适合优先查看完整分析。"),
             reason=" · ".join(part for part in reason_parts if part),
+            generated_at=_now_iso(),
+        )
+        _HOT_RECOMMENDATION_CACHE[cache_key] = (now, response)
+        return response
+
+    first_hot = next((item for item in hot_stocks if _safe_float(item.get("change_percent") if item.get("change_percent") is not None else item.get("change_pct")) is not None), None)
+    if first_hot:
+        code = _normalize_code(str(first_hot.get("code") or ""))
+        change = _safe_float(first_hot.get("change_percent") if first_hot.get("change_percent") is not None else first_hot.get("change_pct"))
+        market = "H股" if code.startswith("HK") or code.endswith(".HK") else "A股"
+        exchange = None
+        if market == "A股":
+            if code.startswith("6"):
+                exchange = "SH"
+            elif code.startswith(("0", "2", "3")):
+                exchange = "SZ"
+        response = CommercialHotRecommendationResponse(
+            stock=CommercialSearchItem(
+                name=str(first_hot.get("name") or code),
+                code=code,
+                market=market,
+                exchange=exchange,
+                aliases=[str(first_hot.get("name") or ""), code],
+                score=_safe_float(first_hot.get("hot_score")) or 80.0,
+            ),
+            action="今日热门观察",
+            summary="今日涨幅活跃，适合优先查看完整分析。",
+            reason=" · ".join(
+                part for part in [
+                    f"今日涨幅{change:+.2f}%" if change is not None else "今日热度活跃",
+                    str(first_hot.get("reason") or "").strip(),
+                    "量化风险过滤未给出强买入信号，先作为今日热门观察。",
+                ]
+                if part
+            ),
             generated_at=_now_iso(),
         )
         _HOT_RECOMMENDATION_CACHE[cache_key] = (now, response)

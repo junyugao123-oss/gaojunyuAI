@@ -29,6 +29,20 @@ def test_benign_going_concern_phrase_is_not_audit_risk():
     assert "持续经营/审计风险" not in ca._distress_risk_flags(stock, profile, [])
 
 
+def test_bank_clearing_business_is_not_liquidation_distress():
+    stock = {"name": "工商银行", "code": "601398.SH", "market": "A股"}
+    profile = {
+        "business": "从事公司和个人金融业务、资金业务、投资银行业务，并提供资产管理服务。",
+        "intro": "办理人民币存款、贷款；代理证券资金清算业务；担任人民币清算行。",
+    }
+    news = [
+        {"title": "工商银行关于赎回次级债券的公告", "summary": ""},
+        {"title": "工商银行已全额赎回规模380亿元次级债券", "summary": ""},
+    ]
+
+    assert "清盘/退市/停牌风险" not in ca._distress_risk_flags(stock, profile, news)
+
+
 def test_financial_institution_debt_ratio_is_not_industrial_penalty():
     financials = {
         "net_profit": 1_000_000_000,
@@ -182,3 +196,74 @@ def test_commercial_search_uses_bundled_static_stock_index_in_container_layout()
 
     assert results[0]["name"] == "神马股份"
     assert results[0]["code"] == "600810.SH"
+
+
+def test_extreme_distress_confirm_point_is_stage_confirmation_not_full_repair_target():
+    history = [
+        {"low": 4.8, "high": 5.3, "close": 5.1},
+        {"low": 3.4, "high": 4.2, "close": 3.8},
+        {"low": 1.2, "high": 2.4, "close": 1.5},
+        {"low": 0.19, "high": 0.32, "close": 0.24},
+    ] * 18
+
+    points = ca._derive_sniper_points(0.24, history, {"low": 2.322, "high": 3.544})
+    confirm = next(item for item in points if item["label"] == "确认位")
+
+    assert confirm["price"] > 0.24
+    assert confirm["price"] <= 0.24 * 1.35
+
+
+def test_high_quality_low_risk_value_candidate_can_be_active_buy():
+    pack = {
+        "stock": {"name": "价值龙头", "code": "600000.SH", "market": "A股"},
+        "valuation": {"current_price": 82.0, "low": 78.0, "high": 118.0},
+        "scores": [
+            {"label": "价值", "score": 7.1},
+            {"label": "估值性价比", "score": 7.6},
+            {"label": "成长", "score": 5.6},
+            {"label": "盈利能力", "score": 7.2},
+            {"label": "财务", "score": 6.8},
+            {"label": "分红", "score": 6.0},
+        ],
+        "quant_metrics": [
+            {"label": "均线结构", "value": "承压"},
+            {"label": "量价确认", "percentile": "正常"},
+            {"label": "年化波动率", "value": "42.0%"},
+        ],
+        "news": [{"tone": "positive"}, {"tone": "neutral"}],
+        "_financials": {"net_profit": 1_000_000_000, "eps": 1.0},
+    }
+
+    action = ca._classify_recommendation_action(pack)
+    gate = ca._active_buy_gate(pack)
+
+    assert action["action"] == "积极买入"
+    assert gate["allowed"] is True
+
+
+def test_distribution_calibration_does_not_upgrade_st_or_loss_maker():
+    pack = {
+        "stock": {"name": "*ST样本", "code": "000001.SZ", "market": "A股"},
+        "valuation": {"current_price": 1.2, "low": 1.0, "high": 1.8},
+        "scores": [
+            {"label": "价值", "score": 6.8},
+            {"label": "估值性价比", "score": 7.5},
+            {"label": "成长", "score": 6.8},
+            {"label": "盈利能力", "score": 2.5},
+            {"label": "财务", "score": 2.8},
+            {"label": "分红", "score": 0.6},
+        ],
+        "quant_metrics": [
+            {"label": "均线结构", "value": "多头"},
+            {"label": "量价确认", "percentile": "放量"},
+            {"label": "年化波动率", "value": "48.0%"},
+        ],
+        "news": [{"tone": "positive"}],
+        "_financials": {"net_profit": -120_000_000, "eps": -0.1},
+    }
+
+    action = ca._classify_recommendation_action(pack)
+    gate = ca._active_buy_gate(pack)
+
+    assert action["action"] in {"谨慎", "回避"}
+    assert gate["allowed"] is False

@@ -405,12 +405,14 @@ body:has(.gyai-analysis-page) {
 
 .gyaia-metric-strip {
   display: grid;
-  grid-template-columns: repeat(4, minmax(0, 1fr));
+  grid-template-columns: repeat(auto-fit, minmax(150px, 1fr));
   gap: 12px;
   align-items: stretch;
 }
 
 .gyaia-metric-strip div {
+  display: flex;
+  flex-direction: column;
   min-width: 0;
   padding: 12px 12px 10px;
   border: 1px solid rgba(114, 96, 79, 0.14);
@@ -477,16 +479,17 @@ body:has(.gyai-analysis-page) {
 }
 
 .gyaia-metric-strip em {
-  display: -webkit-box;
+  display: block;
   margin-top: 7px;
-  overflow: hidden;
+  overflow: visible;
   color: #756d66;
   font-size: 12px;
   font-style: normal;
   font-weight: 560;
   line-height: 1.35;
-  -webkit-box-orient: vertical;
-  -webkit-line-clamp: 2;
+  overflow-wrap: anywhere;
+  text-overflow: clip;
+  white-space: normal;
 }
 
 .gyaia-valuation-row {
@@ -1654,7 +1657,6 @@ body:has(.gyai-analysis-page) {
 
   .gyaia-metric-strip em {
     margin-top: 6px;
-    -webkit-line-clamp: 1;
   }
 
   .gyaia-valuation-row {
@@ -1911,7 +1913,8 @@ body:has(.gyai-analysis-page) {
   }
 
   .gyaia-metric-strip em {
-    -webkit-line-clamp: 3;
+    font-size: 12px;
+    line-height: 1.42;
   }
 
   .gyaia-valuation-row {

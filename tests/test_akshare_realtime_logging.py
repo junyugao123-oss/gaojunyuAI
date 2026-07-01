@@ -216,12 +216,12 @@ def test_tencent_realtime_volume_falls_back_to_legacy_hand_unit_when_not_cross_c
     assert quote.volume == 123400
 
 
-def test_hot_stocks_uses_eastmoney_hot_ranking_when_available(monkeypatch, akshare_fetcher):
+def test_hot_stocks_uses_eastmoney_hot_up_ranking_when_available(monkeypatch, akshare_fetcher):
     fake_akshare = SimpleNamespace()
     monkeypatch.setitem(sys.modules, "akshare", fake_akshare)
     monkeypatch.setattr(
         akshare_fetcher,
-        "_get_eastmoney_hot_stocks",
+        "_get_eastmoney_hot_up_stocks",
         lambda _ak, n: [
             {
                 "rank": 1,
@@ -229,14 +229,14 @@ def test_hot_stocks_uses_eastmoney_hot_ranking_when_available(monkeypatch, aksha
                 "name": "中国长城",
                 "price": 21.8,
                 "change_pct": 9.99,
-                "source": "东方财富人气榜",
+                "source": "东方财富飙升榜",
             }
         ],
     )
 
     result = akshare_fetcher.get_hot_stocks(5)
 
-    assert result[0]["source"] == "东方财富人气榜"
+    assert result[0]["source"] == "东方财富飙升榜"
     assert result[0]["name"] == "中国长城"
 
 
@@ -270,7 +270,7 @@ def test_hot_stocks_falls_back_to_xueqiu_when_primary_sources_empty(monkeypatch,
 
     result = akshare_fetcher.get_hot_stocks(5)
 
-    assert call_order == ["eastmoney_hot", "eastmoney_hot_up", "xueqiu"]
+    assert call_order == ["eastmoney_hot_up", "eastmoney_hot", "xueqiu"]
     assert result == [
         {
             "rank": 1,

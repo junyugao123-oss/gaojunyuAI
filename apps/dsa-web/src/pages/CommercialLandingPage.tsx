@@ -406,12 +406,13 @@ const CommercialLandingPage: React.FC = () => {
   const [suggestionsOpen, setSuggestionsOpen] = useState(false);
   const [highlightedIndex, setHighlightedIndex] = useState(0);
   const [selectedSearchStock, setSelectedSearchStock] = useState<SearchSuggestion | null>(null);
+  const [isSearchFocused, setIsSearchFocused] = useState(false);
   const [showScrollCue, setShowScrollCue] = useState(true);
 
   const recommendedSearchLabel = recommendedSearchStock
     ? getSearchStockLabel(recommendedSearchStock)
     : EMPTY_SEARCH_LABEL;
-  const showRecommendedHotHint = Boolean(recommendedSearchStock && !query.trim());
+  const showRecommendedHotHint = Boolean(recommendedSearchStock && !query.trim() && !isSearchFocused);
 
   useEffect(() => {
     const normalized = normalizeQuery(query);
@@ -563,7 +564,7 @@ const CommercialLandingPage: React.FC = () => {
 
     const normalizedTarget = extractSearchTarget(query);
     if (!normalizedTarget) {
-      if (recommendedSearchStock) {
+      if (recommendedSearchStock && !isSearchFocused) {
         navigate(`/analysis/${encodeURIComponent(recommendedSearchStock.code)}`);
       }
       return;
@@ -663,6 +664,7 @@ const CommercialLandingPage: React.FC = () => {
                     }}
                     onClick={clearDefaultSearchValue}
                     onFocus={() => {
+                      setIsSearchFocused(true);
                       setSuggestionsOpen(Boolean(query.trim()));
                     }}
                     onDoubleClick={() => {
@@ -671,10 +673,11 @@ const CommercialLandingPage: React.FC = () => {
                       }
                     }}
                     onBlur={() => window.setTimeout(() => {
+                      setIsSearchFocused(false);
                       setSuggestionsOpen(false);
                     }, 140)}
                     onKeyDown={handleSearchKeyDown}
-                    placeholder={recommendedSearchLabel}
+                    placeholder={showRecommendedHotHint ? recommendedSearchLabel : EMPTY_SEARCH_LABEL}
                     autoComplete="off"
                   />
 

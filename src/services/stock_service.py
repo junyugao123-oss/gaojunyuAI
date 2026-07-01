@@ -15,6 +15,8 @@ from concurrent.futures import ThreadPoolExecutor, TimeoutError as FuturesTimeou
 from datetime import datetime, timedelta
 from typing import Optional, Dict, Any, List
 
+import requests
+
 from src.repositories.stock_repo import StockRepository
 
 logger = logging.getLogger(__name__)
@@ -22,17 +24,41 @@ logger = logging.getLogger(__name__)
 _HOT_STOCKS_CACHE: Dict[int, tuple[datetime, Dict[str, Any]]] = {}
 _HOT_STOCKS_CACHE_SECONDS = 45
 _HOT_STOCKS_FETCH_EXECUTOR = ThreadPoolExecutor(max_workers=2, thread_name_prefix="hot-stocks")
-_HOT_STOCKS_FAST_FALLBACK: List[Dict[str, Any]] = [
-    {"rank": 1, "code": "002129.SZ", "name": "TCL中环", "change_pct": 0.0, "reason": "半导体材料与新能源链关注度较高"},
-    {"rank": 2, "code": "603650.SH", "name": "彤程新材", "change_pct": 0.0, "reason": "光刻胶与电子材料方向关注度较高"},
-    {"rank": 3, "code": "688234.SH", "name": "天岳先进", "change_pct": 0.0, "reason": "碳化硅半导体材料关注度较高"},
-    {"rank": 4, "code": "300750.SZ", "name": "宁德时代", "change_pct": 0.0, "reason": "新能源龙头关注度稳定"},
-    {"rank": 5, "code": "002594.SZ", "name": "比亚迪", "change_pct": 0.0, "reason": "智能电动车与电池链关注度稳定"},
-    {"rank": 6, "code": "600519.SH", "name": "贵州茅台", "change_pct": 0.0, "reason": "消费龙头关注度稳定"},
-    {"rank": 7, "code": "HK6651", "name": "五一视界", "change_pct": 0.0, "reason": "物理AI与数字孪生方向关注度较高"},
-    {"rank": 8, "code": "688981.SH", "name": "中芯国际", "change_pct": 0.0, "reason": "国产半导体制造关注度较高"},
-    {"rank": 9, "code": "0700.HK", "name": "腾讯控股", "change_pct": 0.0, "reason": "港股互联网龙头关注度稳定"},
-    {"rank": 10, "code": "9988.HK", "name": "阿里巴巴-W", "change_pct": 0.0, "reason": "港股互联网平台关注度稳定"},
+_HOT_STOCKS_REALTIME_CANDIDATES: List[Dict[str, str]] = [
+    {"code": "002129.SZ", "name": "TCL中环", "reason": "半导体材料与新能源链候选"},
+    {"code": "603650.SH", "name": "彤程新材", "reason": "光刻胶与电子材料候选"},
+    {"code": "688234.SH", "name": "天岳先进", "reason": "碳化硅半导体材料候选"},
+    {"code": "002407.SZ", "name": "多氟多", "reason": "氟化工与新能源材料候选"},
+    {"code": "002121.SZ", "name": "科陆电子", "reason": "储能与电力设备候选"},
+    {"code": "002594.SZ", "name": "比亚迪", "reason": "智能电动车与电池链候选"},
+    {"code": "300750.SZ", "name": "宁德时代", "reason": "动力电池链候选"},
+    {"code": "300274.SZ", "name": "阳光电源", "reason": "新能源逆变器候选"},
+    {"code": "601138.SH", "name": "工业富联", "reason": "AI服务器与算力链候选"},
+    {"code": "300502.SZ", "name": "新易盛", "reason": "高速光模块候选"},
+    {"code": "300308.SZ", "name": "中际旭创", "reason": "高速光模块候选"},
+    {"code": "002463.SZ", "name": "沪电股份", "reason": "AI服务器PCB候选"},
+    {"code": "300476.SZ", "name": "胜宏科技", "reason": "AI服务器PCB候选"},
+    {"code": "688256.SH", "name": "寒武纪", "reason": "AI芯片候选"},
+    {"code": "688981.SH", "name": "中芯国际", "reason": "国产半导体制造候选"},
+    {"code": "002371.SZ", "name": "北方华创", "reason": "半导体设备候选"},
+    {"code": "688012.SH", "name": "中微公司", "reason": "半导体设备候选"},
+    {"code": "002156.SZ", "name": "通富微电", "reason": "先进封装候选"},
+    {"code": "300223.SZ", "name": "北京君正", "reason": "芯片设计候选"},
+    {"code": "300666.SZ", "name": "江丰电子", "reason": "半导体材料候选"},
+    {"code": "300124.SZ", "name": "汇川技术", "reason": "工业自动化候选"},
+    {"code": "002050.SZ", "name": "三花智控", "reason": "机器人与热管理候选"},
+    {"code": "002472.SZ", "name": "双环传动", "reason": "机器人传动候选"},
+    {"code": "002896.SZ", "name": "中大力德", "reason": "机器人减速器候选"},
+    {"code": "300024.SZ", "name": "机器人", "reason": "机器人整机候选"},
+    {"code": "300607.SZ", "name": "拓斯达", "reason": "工业机器人候选"},
+    {"code": "300496.SZ", "name": "中科创达", "reason": "智能汽车与端侧AI候选"},
+    {"code": "300339.SZ", "name": "润和软件", "reason": "鸿蒙与国产软件候选"},
+    {"code": "002230.SZ", "name": "科大讯飞", "reason": "AI应用候选"},
+    {"code": "300418.SZ", "name": "昆仑万维", "reason": "AI应用候选"},
+    {"code": "300115.SZ", "name": "长盈精密", "reason": "消费电子与机器人候选"},
+    {"code": "002475.SZ", "name": "立讯精密", "reason": "消费电子与AI硬件候选"},
+    {"code": "000977.SZ", "name": "浪潮信息", "reason": "AI服务器候选"},
+    {"code": "603019.SH", "name": "中科曙光", "reason": "算力基础设施候选"},
 ]
 
 
@@ -130,11 +156,18 @@ class StockService:
                 "stocks": [dict(item) for item in payload.get("stocks", [])],
             }
 
-        rows = self._fetch_hot_rows_with_timeout(cache_limit, timeout_seconds=timeout_seconds)
+        rows = self._fetch_hot_rows_with_timeout(cache_limit * 2, timeout_seconds=timeout_seconds)
         stocks = self._build_hot_stock_items(rows, cache_limit)
         if not stocks:
-            logger.warning("[人气股] 实时热榜暂不可用，使用快速热门候选兜底")
-            stocks = self._build_hot_stock_items(self._fallback_hot_rows(cache_limit), cache_limit)
+            fallback_rows = self._fetch_realtime_candidate_hot_rows(cache_limit * 3)
+            stocks = self._build_hot_stock_items(fallback_rows, cache_limit)
+
+        if not stocks:
+            logger.warning("[人气股] 实时热榜与快速实时候选均不可用，返回空列表以保持首页普通搜索占位")
+            return {
+                "stocks": [],
+                "generated_at": now.isoformat(),
+            }
 
         stocks.sort(key=lambda item: (-(item.get("hot_score") or 0), item.get("rank") or 999))
         result = {
@@ -187,10 +220,10 @@ class StockService:
         })
 
     def _fallback_hot_rows(self, limit: int) -> List[Dict[str, Any]]:
-        if not _HOT_STOCKS_FAST_FALLBACK:
+        if not _HOT_STOCKS_REALTIME_CANDIDATES:
             return []
-        day_offset = datetime.now().timetuple().tm_yday % len(_HOT_STOCKS_FAST_FALLBACK)
-        rotated = _HOT_STOCKS_FAST_FALLBACK[day_offset:] + _HOT_STOCKS_FAST_FALLBACK[:day_offset]
+        day_offset = datetime.now().timetuple().tm_yday % len(_HOT_STOCKS_REALTIME_CANDIDATES)
+        rotated = _HOT_STOCKS_REALTIME_CANDIDATES[day_offset:] + _HOT_STOCKS_REALTIME_CANDIDATES[:day_offset]
         return [
             {
                 **row,
@@ -198,6 +231,87 @@ class StockService:
             }
             for index, row in enumerate(rotated[:limit])
         ]
+
+    @staticmethod
+    def _tencent_symbol(code: str) -> Optional[str]:
+        compact = (code or "").strip().upper()
+        if not compact:
+            return None
+        if compact.endswith(".SH"):
+            return f"sh{compact[:-3]}"
+        if compact.endswith(".SZ"):
+            return f"sz{compact[:-3]}"
+        digits = "".join(ch for ch in compact if ch.isdigit())
+        if len(digits) != 6:
+            return None
+        if digits.startswith(("6", "9")):
+            return f"sh{digits}"
+        if digits.startswith(("0", "2", "3")):
+            return f"sz{digits}"
+        return None
+
+    def _fetch_realtime_candidate_hot_rows(self, limit: int) -> List[Dict[str, Any]]:
+        """Use Tencent batch quotes to build a fast intraday-gainer fallback list."""
+        candidates = self._fallback_hot_rows(max(limit, len(_HOT_STOCKS_REALTIME_CANDIDATES)))
+        symbol_to_candidate: Dict[str, Dict[str, Any]] = {}
+        for candidate in candidates:
+            symbol = self._tencent_symbol(str(candidate.get("code") or ""))
+            if symbol:
+                symbol_to_candidate[symbol] = candidate
+        if not symbol_to_candidate:
+            return []
+
+        try:
+            response = requests.get(
+                "http://qt.gtimg.cn/q=" + ",".join(symbol_to_candidate.keys()),
+                headers={
+                    "Referer": "http://finance.qq.com",
+                    "User-Agent": "Mozilla/5.0",
+                },
+                timeout=5,
+            )
+            response.encoding = "gbk"
+            response.raise_for_status()
+        except Exception as exc:
+            logger.warning("[人气股] 腾讯批量实时候选失败: %s", exc)
+            return []
+
+        rows: List[Dict[str, Any]] = []
+        for line in response.text.split(";"):
+            line = line.strip()
+            if not line or "=" not in line:
+                continue
+            symbol = line.split("=", 1)[0].replace("v_", "").strip()
+            candidate = symbol_to_candidate.get(symbol)
+            if not candidate:
+                continue
+            data_start = line.find('"')
+            data_end = line.rfind('"')
+            if data_start == -1 or data_end <= data_start:
+                continue
+            fields = line[data_start + 1:data_end].split("~")
+            if len(fields) < 33:
+                continue
+            change_pct = self._safe_float(fields[32])
+            if change_pct is None or change_pct < 1.0:
+                continue
+            amount = self._safe_float(fields[37]) if len(fields) > 37 else None
+            amount_yuan = amount * 10000 if amount is not None else None
+            rows.append({
+                "rank": 999,
+                "code": candidate.get("code"),
+                "name": fields[1] or candidate.get("name"),
+                "price": self._safe_float(fields[3]),
+                "change_pct": change_pct,
+                "amount": amount_yuan,
+                "reason": candidate.get("reason") or "实时涨幅候选",
+            })
+
+        rows.sort(key=lambda item: (-(item.get("change_pct") or 0), -(item.get("amount") or 0)))
+        for index, row in enumerate(rows, 1):
+            row["rank"] = index
+            row["reason"] = f"实时涨幅候选 · {row.get('reason')}"
+        return rows[:limit]
 
     def _build_hot_stock_items(self, rows: List[Dict[str, Any]], limit: int) -> List[Dict[str, Any]]:
         try:
@@ -229,16 +343,23 @@ class StockService:
                 rank_value = int(rank)
             except (TypeError, ValueError):
                 rank_value = idx
-            change_pct = self._safe_float(row.get("change_pct") or row.get("change_percent"))
+            raw_change_pct = row.get("change_pct")
+            if raw_change_pct is None:
+                raw_change_pct = row.get("change_percent")
+            change_pct = self._safe_float(raw_change_pct)
+            if change_pct is None or change_pct < 1.0:
+                continue
             amount = self._safe_float(row.get("amount"))
-            amount_score = min(16.0, max(0.0, (len(str(int(amount))) - 7) * 2.2)) if amount else 0.0
-            change_score = max(-8.0, min(18.0, (change_pct or 0.0) * 2.1))
-            rank_score = max(0.0, 100.0 - (rank_value - 1) * 4.5)
-            hot_score = max(0.0, min(100.0, rank_score + change_score + amount_score))
+            amount_score = min(12.0, max(0.0, (len(str(int(amount))) - 7) * 1.8)) if amount else 0.0
+            change_value = change_pct if change_pct is not None else 0.0
+            change_score = max(-35.0, min(68.0, change_value * 7.5))
+            rank_score = max(0.0, 52.0 - (rank_value - 1) * 2.4)
+            positive_heat_bonus = 8.0 if change_pct is not None and change_pct >= 2.0 else 0.0
+            hot_score = max(0.0, min(100.0, rank_score + change_score + amount_score + positive_heat_bonus))
 
             reason_parts = [str(row.get("reason") or "热度排名靠前")]
             if change_pct is not None:
-                reason_parts.append("涨幅活跃" if change_pct > 0 else "关注度活跃")
+                reason_parts.append(f"涨幅{change_pct:+.2f}%" if change_pct > 0 else "关注度活跃")
             if amount:
                 reason_parts.append("成交活跃")
 
