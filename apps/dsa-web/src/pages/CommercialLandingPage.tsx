@@ -25,6 +25,7 @@ import './CommercialLandingPage.css';
 const LANDING_COPY_VERSION = 'example-preview-20260625';
 const SEARCH_DEBOUNCE_MS = 180;
 const SEARCH_RESULT_LIMIT = 8;
+const HOT_RECOMMENDATION_LOADING_LABEL = '正在筛选今日热门股';
 
 type StockProfile = {
   name: string;
@@ -395,8 +396,8 @@ const CommercialLandingPage: React.FC = () => {
   const { index: stockIndex } = useStockIndex();
   const previewStock = DEFAULT_STOCK;
   const [recommendedSearchStock, setRecommendedSearchStock] = useState<SearchSuggestion | null>(null);
+  const [isHotRecommendationLoading, setIsHotRecommendationLoading] = useState(true);
   const [query, setQuery] = useState('');
-  const [isSearchFocused, setIsSearchFocused] = useState(false);
   const [suggestions, setSuggestions] = useState<SearchSuggestion[]>([]);
   const [suggestionsOpen, setSuggestionsOpen] = useState(false);
   const [highlightedIndex, setHighlightedIndex] = useState(0);
@@ -405,8 +406,10 @@ const CommercialLandingPage: React.FC = () => {
 
   const recommendedSearchLabel = recommendedSearchStock
     ? getSearchStockLabel(recommendedSearchStock)
-    : EMPTY_SEARCH_LABEL;
-  const showRecommendedHotHint = Boolean(recommendedSearchStock && !query.trim() && !isSearchFocused);
+    : isHotRecommendationLoading
+      ? HOT_RECOMMENDATION_LOADING_LABEL
+      : EMPTY_SEARCH_LABEL;
+  const showRecommendedHotHint = Boolean((recommendedSearchStock || isHotRecommendationLoading) && !query.trim());
 
   useEffect(() => {
     const normalized = normalizeQuery(query);
@@ -450,6 +453,7 @@ const CommercialLandingPage: React.FC = () => {
     commercialAnalysisApi.getHotRecommendation(18)
       .then((response) => {
         if (cancelled || hotRecommendationSeqRef.current !== sequence) return;
+        setIsHotRecommendationLoading(false);
         if (!response.stock || response.action === '待加载' || response.action === '无合适标的') {
           setRecommendedSearchStock(null);
           return;
@@ -462,6 +466,7 @@ const CommercialLandingPage: React.FC = () => {
       })
       .catch(() => {
         if (cancelled || hotRecommendationSeqRef.current !== sequence) return;
+        setIsHotRecommendationLoading(false);
         setRecommendedSearchStock(null);
       });
 
@@ -650,10 +655,8 @@ const CommercialLandingPage: React.FC = () => {
                       setSuggestionsOpen(Boolean(nextQuery.trim()));
                       setHighlightedIndex(0);
                     }}
-                    onMouseDown={() => setIsSearchFocused(true)}
                     onClick={clearDefaultSearchValue}
                     onFocus={() => {
-                      setIsSearchFocused(true);
                       setSuggestionsOpen(Boolean(query.trim()));
                     }}
                     onDoubleClick={() => {
@@ -662,11 +665,10 @@ const CommercialLandingPage: React.FC = () => {
                       }
                     }}
                     onBlur={() => window.setTimeout(() => {
-                      setIsSearchFocused(false);
                       setSuggestionsOpen(false);
                     }, 140)}
                     onKeyDown={handleSearchKeyDown}
-                    placeholder={isSearchFocused ? '' : recommendedSearchLabel}
+                    placeholder={recommendedSearchLabel}
                     autoComplete="off"
                   />
 
