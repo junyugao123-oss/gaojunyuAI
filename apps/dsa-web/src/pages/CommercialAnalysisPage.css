@@ -405,8 +405,8 @@ body:has(.gyai-analysis-page) {
 
 .gyaia-metric-strip {
   display: grid;
-  grid-template-columns: repeat(auto-fit, minmax(150px, 1fr));
-  gap: 12px;
+  grid-template-columns: repeat(4, minmax(0, 1fr));
+  gap: 10px;
   align-items: stretch;
 }
 
